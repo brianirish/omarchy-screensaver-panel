@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "brianirish.screensaver",
+  "name": "Screensaver",
+  "version": "1.0.0",
+  "author": "Brian",
+  "description": "Screensaver settings: toggle, idle timing, effect picker, branding",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Screensaver",
+    "description": "Screensaver settings: toggle, idle timing, effect picker, branding",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": { "effects": [] }
+  }
+}
