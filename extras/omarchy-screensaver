@@ -41,21 +41,24 @@ wait_for_terminal_resize
 
 # Effects pinned in the Screensaver panel live inline on the widget's
 # shell.json entry (bar layout or plugins[]). Empty or missing means all.
+# Only lowercase effect names pass the filter, so nothing read from the
+# config can ever be handed to ttfx as a flag.
 mapfile -t pinned_effects < <(jq -r \
   '[.bar.layout[]?[]?, .plugins[]?] | map(select(.id == "brianirish.screensaver"))
-   | (.[0].effects // []) | if type == "array" then . else [.] end | .[]' \
-  ~/.config/omarchy/shell.json 2>/dev/null)
+   | (.[0].effects // []) | if type == "array" then . else [.] end
+   | map(select(type == "string" and test("^[a-z]+$"))) | .[]' \
+  "$HOME/.config/omarchy/shell.json" 2>/dev/null)
 
 effect_args=(--random-effect)
 ((${#pinned_effects[@]})) && effect_args+=(--include-effects "${pinned_effects[@]}")
 
 while true; do
-  ttfx -i ~/.config/omarchy/branding/screensaver.txt \
+  ttfx -i "$HOME/.config/omarchy/branding/screensaver.txt" \
     --frame-rate 120 --canvas-width 0 --canvas-height 0 --reuse-canvas --anchor-canvas c --anchor-text c \
     "${effect_args[@]}" --no-eol --no-restore-cursor &
 
   while pgrep -t "${tty#/dev/}" -x ttfx >/dev/null; do
-    if read -n1 -t 1 || ! screensaver_in_focus; then
+    if read -rn1 -t 1 || ! screensaver_in_focus; then
       exit_screensaver
     fi
   done

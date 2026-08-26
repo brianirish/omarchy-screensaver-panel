@@ -1,0 +1,16 @@
+name: Feature request
+description: Suggest an improvement to the panel
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's missing or awkward?
+      description: Describe the workflow you're trying to accomplish.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like the panel to do? Mockups welcome.

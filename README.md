@@ -1,5 +1,8 @@
 # Omarchy Screensaver Panel
 
+[![CI](https://github.com/brianirish/omarchy-screensaver-panel/actions/workflows/ci.yml/badge.svg)](https://github.com/brianirish/omarchy-screensaver-panel/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A settings GUI for the [Omarchy](https://omarchy.org) screensaver — the knobs
 that were previously config-file-and-CLI only, as a native shell panel.
 

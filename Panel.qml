@@ -85,8 +85,11 @@ Panel {
   }
 
   function saveIdle(key, value) {
+    if (key !== "screensaver" && key !== "lock") return
+    var v = Math.max(0, Math.round(Number(value)))
+    if (!isFinite(v)) return
     var script = 'f="$HOME/.config/omarchy/shell.json"; tmp="$f.tmp.$$"; ' +
-      "jq --argjson v " + value + " '.idle." + key + ' = $v\' "$f" > "$tmp" && mv "$tmp" "$f"'
+      "jq --argjson v " + v + " '.idle." + key + ' = $v\' "$f" > "$tmp" && mv "$tmp" "$f"'
     idleWriteProc.command = ["bash", "-c", script]
     idleWriteProc.running = true
   }

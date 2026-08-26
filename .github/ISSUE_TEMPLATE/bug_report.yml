@@ -1,0 +1,40 @@
+name: Bug report
+description: Something in the panel or the effect override misbehaves
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! Security problems should go through
+        [private vulnerability reporting](../../security/advisories/new) instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions
+      description: Output of `omarchy version`, and your plugin commit (`git -C ~/.config/omarchy/plugins/brianirish.screensaver log -1 --oneline`).
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: override
+    attributes:
+      label: Is the effect override installed?
+      options:
+        - "Yes — /usr/local/bin/omarchy-screensaver + PATH tweak"
+        - "No — plugin only"
+        - "Not sure"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: "QML/shell output helps: `journalctl --user --since '10 minutes ago' | grep -i -e qml -e screensaver`"
+      render: text
