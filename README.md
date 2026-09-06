@@ -7,7 +7,7 @@
 A settings GUI for the [Omarchy](https://omarchy.org) screensaver — the knobs
 that were previously config-file-and-CLI only, as a native shell panel.
 
-![The panel](docs/panel.png)
+![The panel](preview.png)
 
 Omarchy's screensaver (terminal text effects over your ASCII branding) is
 lovely, but tuning it means editing `shell.json` by hand and there's no way to
