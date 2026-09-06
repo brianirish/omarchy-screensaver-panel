@@ -27,7 +27,7 @@ Useful context for assessing findings:
   inputs are pinned to known keys and integers (`saveIdle` in `Panel.qml`).
 - The optional `extras/omarchy-screensaver` override runs as the user (never
   root). Effect names read from `shell.json` are allowlist-filtered
-  (`^[a-z]+$`) before being passed to `ttfx`, so config values cannot inject
+  (`^[a-z][a-z0-9-]*$`, so never a leading dash) before being passed to `ttfx`, so config values cannot inject
   flags.
 - The plugin handles no secrets, opens no sockets, and makes no network
   requests.

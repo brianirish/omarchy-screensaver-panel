@@ -5,6 +5,6 @@
 ## Checklist
 
 - [ ] Tested on Omarchy (version: ______)
-- [ ] `shellcheck` and `bash -n` pass on any changed shell scripts
+- [ ] `scripts/check` passes
 - [ ] `CHANGELOG.md` updated under `Unreleased`
 - [ ] Screenshot attached for visual changes

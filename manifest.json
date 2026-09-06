@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "brianirish.screensaver",
   "name": "Screensaver",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "Brian",
   "description": "Screensaver settings: toggle, idle timing, effect picker, branding",
   "kinds": [

@@ -6,19 +6,8 @@ on:
   pull_request:
 
 jobs:
-  lint:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Shell syntax
-        run: bash -n extras/omarchy-screensaver
-      - name: ShellCheck
-        run: shellcheck extras/omarchy-screensaver
-      - name: Manifest is valid JSON with expected identity
-        run: |
-          jq empty manifest.json
-          jq -e '.schemaVersion == 1 and .id == "brianirish.screensaver" and (.entryPoints.barWidget | length > 0)' manifest.json
-      - name: Issue templates are valid YAML
-        run: |
-          python3 -c "import sys, yaml; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" \
-            .github/ISSUE_TEMPLATE/*.yml .github/workflows/*.yml
+      - run: scripts/check

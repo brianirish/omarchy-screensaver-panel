@@ -41,12 +41,13 @@ wait_for_terminal_resize
 
 # Effects pinned in the Screensaver panel live inline on the widget's
 # shell.json entry (bar layout or plugins[]). Empty or missing means all.
-# Only lowercase effect names pass the filter, so nothing read from the
-# config can ever be handed to ttfx as a flag.
+# Only plain effect names pass the filter (lowercase letters, digits and
+# dashes, never a leading dash), so nothing read from the config can ever be
+# handed to ttfx as a flag.
 mapfile -t pinned_effects < <(jq -r \
   '[.bar.layout[]?[]?, .plugins[]?] | map(select(.id == "brianirish.screensaver"))
    | (.[0].effects // []) | if type == "array" then . else [.] end
-   | map(select(type == "string" and test("^[a-z]+$"))) | .[]' \
+   | map(select(type == "string" and test("^[a-z][a-z0-9-]*$"))) | .[]' \
   "$HOME/.config/omarchy/shell.json" 2>/dev/null)
 
 effect_args=(--random-effect)

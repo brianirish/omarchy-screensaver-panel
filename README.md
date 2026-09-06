@@ -1,6 +1,7 @@
 # Omarchy Screensaver Panel
 
 [![CI](https://github.com/brianirish/omarchy-screensaver-panel/actions/workflows/ci.yml/badge.svg)](https://github.com/brianirish/omarchy-screensaver-panel/actions/workflows/ci.yml)
+[![Sync upstream](https://github.com/brianirish/omarchy-screensaver-panel/actions/workflows/sync-upstream.yml/badge.svg)](https://github.com/brianirish/omarchy-screensaver-panel/actions/workflows/sync-upstream.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A settings GUI for the [Omarchy](https://omarchy.org) screensaver — the knobs
@@ -68,8 +69,10 @@ hl.env("PATH", table.concat(path_entries, ":"))
 Then reload/relog. Pinned effects are stored inline on the widget's
 `shell.json` entry; with none pinned the override behaves exactly like stock.
 
-> The override is a fork of the stock script — if an `omarchy update` changes
-> `/usr/share/omarchy/bin/omarchy-screensaver`, re-sync the copy.
+> The override is a fork of the stock script. A daily workflow re-syncs it
+> with upstream Omarchy, and the effect picker with the `ttfx` Omarchy ships,
+> and cuts a release when either changes. After `omarchy plugin update`,
+> re-run the install line above so `/usr/local/bin` has the current copy.
 
 ## Uninstall
 

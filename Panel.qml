@@ -176,6 +176,8 @@ Panel {
           implicitHeight: Math.max(heroIcon.implicitHeight, heroLabels.implicitHeight)
 
           Text {
+
+            textFormat: Text.PlainText
             id: heroIcon
             text: "󱄄"
             color: root.bar.foreground
@@ -195,6 +197,8 @@ Panel {
             spacing: Style.space(2)
 
             Text {
+
+              textFormat: Text.PlainText
               text: "Screensaver"
               color: root.bar.foreground
               font.family: root.bar.fontFamily
@@ -205,6 +209,8 @@ Panel {
             }
 
             Text {
+
+              textFormat: Text.PlainText
               text: root.statusText
               color: Qt.darker(root.bar.foreground, 1.4)
               font.family: root.bar.fontFamily
@@ -348,6 +354,8 @@ Panel {
           }
 
           Text {
+
+            textFormat: Text.PlainText
             width: parent.width
             text: "Pick which effects the random rotation may use. None selected means all of them."
             color: root.bar.foreground
@@ -396,6 +404,8 @@ Panel {
           }
 
           Text {
+
+            textFormat: Text.PlainText
             width: parent.width
             text: "Text opens the ASCII art in your editor; image converts a PNG/SVG. Either way the result previews immediately."
             color: root.bar.foreground
@@ -439,6 +449,8 @@ Panel {
       implicitHeight: Math.max(rowLabel.implicitHeight, rowValue.implicitHeight)
 
       Text {
+
+        textFormat: Text.PlainText
         id: rowLabel
         text: timingRow.label
         color: root.bar.foreground
@@ -450,6 +462,8 @@ Panel {
       }
 
       Text {
+
+        textFormat: Text.PlainText
         id: rowValue
         text: timingRow.valueText
         color: root.bar.foreground

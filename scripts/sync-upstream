@@ -1,0 +1,458 @@
+#!/usr/bin/env python3
+"""Keep the plugin in step with the two upstreams it tracks.
+
+extras/omarchy-screensaver is a patched copy of Omarchy's stock
+bin/omarchy-screensaver. When the stock script changes upstream, the change is
+three-way merged onto the override, with extras/omarchy-screensaver.stock (the
+stock script as of the last sync) as the merge base.
+
+Panel.qml lists every ttfx effect. Omarchy pins ttfx through the PKGBUILD in
+omacom-io/omarchy-pkgs, so the list is compared against src/effects/mod.rs at
+that version's tag: effects ttfx gained are added with the label and
+description the registry gives them, effects it dropped are removed, and
+entries that already exist keep their hand-written label and description.
+
+When something moved, the version in manifest.json is bumped (minor for an
+effect change, patch for a script re-sync), CHANGELOG.md and README.md are
+updated, and release notes plus a commit message are written for the workflow
+to use. A merge conflict in the override is never settled here: the override
+is left untouched, a report is written, and conflict=true is emitted so a
+human gets an issue. A ttfx version bump that changes no effect only updates
+upstream.json (changed=true, release=false).
+
+Usage:
+  scripts/sync-upstream [--dry-run] [--out-dir DIR] [--write-conflicts]
+                        [--stock FILE] [--registry FILE] [--ttfx-version X.Y.Z]
+  scripts/sync-upstream --lint
+
+--lint is offline: Panel.qml's effect list must be sorted, unique, in the exact
+form this script writes, with names the override's allowlist accepts, and
+README.md's effect count must match. --stock, --registry and --ttfx-version
+stand in for the network fetches, for testing. --write-conflicts writes a
+conflicting merge, markers and all, so it can be settled by hand.
+
+Outputs, appended to $GITHUB_OUTPUT when set and always printed:
+  changed, release, conflict, version, tag, message_file, notes_file,
+  conflict_file
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+PLUGIN_REPO = "brianirish/omarchy-screensaver-panel"
+PKGS_REPO = "omacom-io/omarchy-pkgs"
+PKGBUILD_PATH = "pkgbuilds/ttfx/PKGBUILD"
+REGISTRY_PATH = "src/effects/mod.rs"
+
+OVERRIDE = ROOT / "extras/omarchy-screensaver"
+STOCK = ROOT / "extras/omarchy-screensaver.stock"
+PANEL = ROOT / "Panel.qml"
+MANIFEST = ROOT / "manifest.json"
+CHANGELOG = ROOT / "CHANGELOG.md"
+README = ROOT / "README.md"
+LOCK = ROOT / "upstream.json"
+
+INSTALL_LINE = "sudo install -m 755 extras/omarchy-screensaver /usr/local/bin/omarchy-screensaver"
+
+# Must stay in step with the jq allowlist in extras/omarchy-screensaver.
+EFFECT_NAME = re.compile(r"^[a-z][a-z0-9-]*$")
+README_COUNT = re.compile(r"\b(\d+) `ttfx` effects")
+
+
+# ---------------------------------------------------------------- fetching
+
+def fetch(url, accept=None):
+    headers = {"User-Agent": PLUGIN_REPO}
+    if accept:
+        headers["Accept"] = accept
+    token = os.environ.get("GITHUB_TOKEN")
+    if token and url.startswith("https://api.github.com/"):
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return response.read().decode()
+
+
+def api(path):
+    return json.loads(fetch(f"https://api.github.com/{path}", "application/vnd.github+json"))
+
+
+def raw(repo, ref, path):
+    return fetch(f"https://raw.githubusercontent.com/{repo}/{ref}/{path}")
+
+
+def default_branch(repo):
+    return api(f"repos/{repo}")["default_branch"]
+
+
+def latest_commit(repo, branch, path):
+    commits = api(f"repos/{repo}/commits?sha={branch}&path={path}&per_page=1")
+    if not commits:
+        raise SystemExit(f"{repo} has no commit touching {path} on {branch}")
+    return commits[0]["sha"]
+
+
+# ------------------------------------------------------------ stock script
+
+def fetch_stock(args, lock):
+    entry = lock["omarchy-screensaver"]
+    if args.stock:
+        return Path(args.stock).read_text(), "local"
+    sha = latest_commit(entry["repo"], default_branch(entry["repo"]), entry["path"])
+    return raw(entry["repo"], sha, entry["path"]), sha
+
+
+def merge_stock(new_stock, sha):
+    """Three-way merge the upstream change onto the override.
+
+    Returns (merged text, conflict hunk count); 0 hunks means it applied clean.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        ours, base, theirs = (Path(tmp, name) for name in ("ours", "base", "theirs"))
+        ours.write_text(OVERRIDE.read_text())
+        base.write_text(STOCK.read_text())
+        theirs.write_text(new_stock)
+        run = subprocess.run(
+            ["git", "merge-file", "-p",
+             "-L", "extras/omarchy-screensaver",
+             "-L", "stock at last sync",
+             "-L", f"stock at {sha[:7]}",
+             str(ours), str(base), str(theirs)],
+            capture_output=True, text=True)
+    # merge-file exits with the conflict count, or "negative" (255) on error.
+    if run.returncode > 127 or run.returncode < 0:
+        raise SystemExit(f"git merge-file failed: {run.stderr.strip()}")
+    return run.stdout, run.returncode
+
+
+def commit_url(lock, sha):
+    if sha == "local":
+        return "a local file"
+    return f"https://github.com/{lock['omarchy-screensaver']['repo']}/commit/{sha}"
+
+
+def conflict_report(lock, sha, hunks, merged):
+    entry = lock["omarchy-screensaver"]
+    return f"""The stock `{entry['path']}` in {entry['repo']} changed ({commit_url(lock, sha)}) and the change does not merge cleanly onto `extras/omarchy-screensaver` ({hunks} conflict hunk{'s' if hunks != 1 else ''}).
+
+- Stock at the last sync: `extras/omarchy-screensaver.stock` ({commit_url(lock, entry['commit'])})
+- Stock now: https://github.com/{entry['repo']}/blob/{sha}/{entry['path']}
+
+<details>
+<summary>Merge result</summary>
+
+```bash
+{merged.rstrip()}
+```
+
+</details>
+
+To settle it locally:
+
+```bash
+scripts/sync-upstream --write-conflicts   # writes the merge, markers and all, and bumps the version
+$EDITOR extras/omarchy-screensaver        # resolve the markers
+scripts/check
+```
+
+Then commit, tag `v<version from manifest.json>` and publish the release. The daily sync-upstream workflow filed this and will not file another while it stays open.
+"""
+
+
+# ---------------------------------------------------------------- effects
+
+VARIANT = re.compile(
+    r"((?:^[ \t]*///[^\n]*\n)+)^[ \t]*([A-Z][A-Za-z0-9]*)\(\w+::([A-Za-z0-9]+)Config\)",
+    re.M)
+
+
+def fetch_registry(args, lock):
+    entry = lock["ttfx"]
+    if args.registry:
+        return Path(args.registry).read_text(), args.ttfx_version or entry["version"]
+    pkgbuild = raw(PKGS_REPO, default_branch(PKGS_REPO), PKGBUILD_PATH)
+    match = re.search(r"^pkgver=([0-9][0-9A-Za-z.]*)\s*$", pkgbuild, re.M)
+    if not match:
+        raise SystemExit(f"no pkgver in {PKGS_REPO}/{PKGBUILD_PATH}")
+    version = match.group(1)
+    return raw(entry["repo"], f"v{version}", REGISTRY_PATH), version
+
+
+def parse_registry(text):
+    """Effects from ttfx's clap registry, as {name: {value, label, description}}.
+
+    clap names a subcommand after its enum variant in kebab-case. The label is
+    the config struct's CamelCase split into words, and the description is the
+    variant's doc comment without its trailing period.
+    """
+    start = text.find("pub enum EffectCommand")
+    if start < 0:
+        raise SystemExit("ttfx registry has no EffectCommand enum")
+    body = text[start:]
+    body = body[:body.find("\n}")]
+    effects = {}
+    for docs, variant, struct in VARIANT.findall(body):
+        name = re.sub(r"(?<!^)(?=[A-Z])", "-", variant).lower()
+        if not EFFECT_NAME.match(name):
+            raise SystemExit(f"ttfx effect {name!r} would not pass the override's allowlist")
+        label = " ".join(re.findall(r"[A-Z][a-z0-9]*", struct))
+        description = " ".join(
+            line.strip().lstrip("/").strip() for line in docs.strip().splitlines()).rstrip(".")
+        effects[name] = {"value": name, "label": label, "description": description}
+    if not effects:
+        raise SystemExit("no effects parsed from the ttfx registry")
+    return effects
+
+
+BLOCK_OPEN = "  readonly property var effectOptions: [\n"
+BLOCK_CLOSE = "\n  ]\n"
+QML_STRING = r'"(?:[^"\\]|\\.)*"'
+ENTRY = re.compile(
+    rf'^    \{{ value: ({QML_STRING}), label: ({QML_STRING}), description: ({QML_STRING}) \}},?$')
+
+
+def qml_string(value):
+    return json.dumps(value, ensure_ascii=False)
+
+
+def panel_block(text):
+    """Span of the entries inside Panel.qml's effectOptions array."""
+    start = text.find(BLOCK_OPEN)
+    if start < 0:
+        raise SystemExit("Panel.qml has no effectOptions block")
+    start += len(BLOCK_OPEN)
+    end = text.find(BLOCK_CLOSE, start)
+    if end < 0:
+        raise SystemExit("Panel.qml effectOptions block is unterminated")
+    return start, end
+
+
+def parse_panel(text):
+    start, end = panel_block(text)
+    effects = {}
+    for line in text[start:end].split("\n"):
+        match = ENTRY.match(line)
+        if not match:
+            raise SystemExit(
+                f"Panel.qml effect entry is not in the form this script writes: {line.strip()!r}")
+        value, label, description = (json.loads(group) for group in match.groups())
+        if value in effects:
+            raise SystemExit(f"Panel.qml lists {value!r} twice")
+        effects[value] = {"value": value, "label": label, "description": description}
+    return effects
+
+
+def render_panel(effects):
+    return ",\n".join(
+        f"    {{ value: {qml_string(e['value'])}, label: {qml_string(e['label'])}, "
+        f"description: {qml_string(e['description'])} }}"
+        for e in sorted(effects.values(), key=lambda e: e["value"]))
+
+
+# ------------------------------------------------------------- versioning
+
+def bump(version, part):
+    major, minor, patch = (int(x) for x in version.split("."))
+    if part == "minor":
+        return f"{major}.{minor + 1}.0"
+    return f"{major}.{minor}.{patch + 1}"
+
+
+def set_manifest_version(text, version):
+    new, count = re.subn(r'("version":\s*")[^"]+(")', rf"\g<1>{version}\2", text, count=1)
+    if count != 1:
+        raise SystemExit("manifest.json has no version field")
+    return new
+
+
+def add_changelog_entry(text, version, today, sections):
+    entry = [f"## [{version}] - {today}", ""]
+    for heading, bullets in sections:
+        if bullets:
+            entry += [f"### {heading}", ""] + [f"- {b}" for b in bullets] + [""]
+    match = re.search(r"^## \[\d", text, re.M)
+    if not match:
+        raise SystemExit("CHANGELOG.md has no release section to insert before")
+    text = text[:match.start()] + "\n".join(entry) + "\n" + text[match.start():]
+    link = f"[{version}]: https://github.com/{PLUGIN_REPO}/releases/tag/v{version}\n"
+    match = re.search(r"^\[\d+\.\d+\.\d+\]:", text, re.M)
+    if not match:
+        raise SystemExit("CHANGELOG.md has no release link to insert before")
+    return text[:match.start()] + link + text[match.start():]
+
+
+def release_notes(sections, extra):
+    parts = []
+    for heading, bullets in sections:
+        if bullets:
+            parts.append(f"## {heading}\n\n" + "\n".join(f"- {b}" for b in bullets))
+    parts += extra
+    parts.append("Cut by the daily upstream sync workflow. Full history in CHANGELOG.md.")
+    return "\n\n".join(parts) + "\n"
+
+
+def commit_message(title, version, sections):
+    body = [f"- {b}" for _, bullets in sections for b in bullets]
+    return "\n".join([title, "", f"v{version}", ""] + body) + "\n"
+
+
+# ------------------------------------------------------------------- lint
+
+def lint():
+    text = PANEL.read_text()
+    effects = parse_panel(text)
+    start, end = panel_block(text)
+    if text[start:end] != render_panel(effects):
+        raise SystemExit("Panel.qml effect entries must be sorted by value, one per line, "
+                         "in the form scripts/sync-upstream writes")
+    for name in effects:
+        if not EFFECT_NAME.match(name):
+            raise SystemExit(f"Panel.qml effect {name!r} would not pass the override's allowlist")
+    match = README_COUNT.search(README.read_text())
+    if not match:
+        raise SystemExit("README.md no longer says how many `ttfx` effects there are")
+    if int(match.group(1)) != len(effects):
+        raise SystemExit(f"README.md says {match.group(1)} ttfx effects; Panel.qml lists {len(effects)}")
+    lock = json.loads(LOCK.read_text())
+    stock_sha = lock["omarchy-screensaver"]["commit"]
+    ttfx_version = lock["ttfx"]["version"]
+    if not STOCK.exists():
+        raise SystemExit(f"{STOCK.relative_to(ROOT)} is missing")
+    print(f"{len(effects)} effects, ttfx {ttfx_version}, stock script at {stock_sha[:7]}")
+
+
+# ------------------------------------------------------------------- main
+
+def emit(outputs):
+    lines = [f"{k}={str(v).lower() if isinstance(v, bool) else v}" for k, v in outputs.items()]
+    path = os.environ.get("GITHUB_OUTPUT")
+    if path:
+        with open(path, "a") as handle:
+            handle.write("\n".join(lines) + "\n")
+    print("\n".join(lines))
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--lint", action="store_true", help="offline consistency checks only")
+    parser.add_argument("--dry-run", action="store_true", help="report, but write nothing to the repo")
+    parser.add_argument("--out-dir", help="where the notes, commit message and conflict report go")
+    parser.add_argument("--write-conflicts", action="store_true",
+                        help="write a conflicting merge with its markers instead of reporting it")
+    parser.add_argument("--stock", help="use this file as the upstream stock script")
+    parser.add_argument("--registry", help="use this file as ttfx's src/effects/mod.rs")
+    parser.add_argument("--ttfx-version", help="ttfx version to record with --registry")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    if args.lint:
+        lint()
+        return
+
+    lock = json.loads(LOCK.read_text())
+    out_dir = Path(args.out_dir) if args.out_dir else Path(tempfile.mkdtemp(prefix="sync-upstream-"))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    outputs = {"changed": False, "release": False, "conflict": False}
+    writes = {}
+    added_bullets, changed_bullets, removed_bullets, extra_notes, titles = [], [], [], [], []
+
+    # Stock script: three-way merge upstream's change onto the override.
+    new_stock, stock_sha = fetch_stock(args, lock)
+    stock_synced = False
+    if new_stock != STOCK.read_text():
+        merged, hunks = merge_stock(new_stock, stock_sha)
+        if hunks and not args.write_conflicts:
+            report = out_dir / "conflict.md"
+            report.write_text(conflict_report(lock, stock_sha, hunks, merged))
+            outputs.update(conflict=True, conflict_file=str(report))
+            print(f"stock script changed ({stock_sha[:7]}) and conflicts with the override; "
+                  f"report in {report}", file=sys.stderr)
+        else:
+            if hunks:
+                print(f"writing {hunks} conflict hunk(s) into extras/omarchy-screensaver; "
+                      "resolve the markers before committing", file=sys.stderr)
+            stock_synced = True
+            writes[OVERRIDE] = merged
+            writes[STOCK] = new_stock
+            lock["omarchy-screensaver"]["commit"] = stock_sha
+            changed_bullets.append(
+                "`extras/omarchy-screensaver`: re-synced with the stock Omarchy script "
+                f"({commit_url(lock, stock_sha)})")
+            extra_notes.append(
+                "If you use effect pinning, refresh the installed override after "
+                f"`omarchy plugin update`:\n\n```bash\n{INSTALL_LINE}\n```")
+            titles.append("omarchy-screensaver override re-sync")
+
+    # Effects: add what ttfx gained, drop what it lost, keep existing entries as written.
+    registry, ttfx_version = fetch_registry(args, lock)
+    upstream = parse_registry(registry)
+    panel_text = PANEL.read_text()
+    current = parse_panel(panel_text)
+    added = sorted(set(upstream) - set(current))
+    removed = sorted(set(current) - set(upstream))
+    if added or removed:
+        effects = {k: v for k, v in current.items() if k in upstream}
+        effects.update((k, upstream[k]) for k in added)
+        start, end = panel_block(panel_text)
+        writes[PANEL] = panel_text[:start] + render_panel(effects) + panel_text[end:]
+        readme, count = README_COUNT.subn(f"{len(effects)} `ttfx` effects", README.read_text(), count=1)
+        if count:
+            writes[README] = readme
+        for name in added:
+            effect = upstream[name]
+            added_bullets.append(
+                f"`{name}` effect ({effect['label']}), new in ttfx {ttfx_version}: "
+                f"{effect['description']}.")
+        for name in removed:
+            removed_bullets.append(f"`{name}` effect, dropped by ttfx {ttfx_version}.")
+        titles.append(f"ttfx {ttfx_version} effect list")
+    lock["ttfx"]["version"] = ttfx_version
+
+    lock_text = json.dumps(lock, indent=2) + "\n"
+    if lock_text != LOCK.read_text():
+        writes[LOCK] = lock_text
+
+    sections = [("Added", added_bullets), ("Changed", changed_bullets), ("Removed", removed_bullets)]
+    part = "minor" if (added or removed) else ("patch" if stock_synced else None)
+    message = None
+    if part:
+        version = bump(json.loads(MANIFEST.read_text())["version"], part)
+        today = datetime.now(timezone.utc).date().isoformat()
+        writes[MANIFEST] = set_manifest_version(MANIFEST.read_text(), version)
+        writes[CHANGELOG] = add_changelog_entry(CHANGELOG.read_text(), version, today, sections)
+        notes = out_dir / "notes.md"
+        notes.write_text(release_notes(sections, extra_notes))
+        title = "Sync upstream: " + "; ".join(titles)
+        message = commit_message(title, version, sections)
+        outputs.update(release=True, version=version, tag=f"v{version}", notes_file=str(notes))
+    elif writes:
+        message = f"Record ttfx {ttfx_version} as the version the effect list matches\n"
+
+    if writes:
+        outputs["changed"] = True
+        message_file = out_dir / "commit-message.txt"
+        message_file.write_text(message)
+        outputs["message_file"] = str(message_file)
+        for path in writes:
+            print(f"{'would write' if args.dry_run else 'writing'} {path.relative_to(ROOT)}")
+        if not args.dry_run:
+            for path, text in writes.items():
+                path.write_text(text)
+    else:
+        print("nothing to sync")
+    emit(outputs)
+
+
+if __name__ == "__main__":
+    main()

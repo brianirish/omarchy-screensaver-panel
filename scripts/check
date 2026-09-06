@@ -1,0 +1,57 @@
+#!/bin/bash
+
+# Every check CI runs, in one place, so `scripts/check` locally is exactly
+# what a pull request is held to. Needs bash, jq, shellcheck and python3;
+# the YAML check also wants PyYAML and is skipped with a note without it.
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+step() { printf '\n== %s\n' "$*"; }
+
+step "Shell syntax"
+bash -n extras/omarchy-screensaver scripts/check scripts/vendor/omarchy-plugin-validate
+
+step "ShellCheck"
+shellcheck extras/omarchy-screensaver scripts/check
+
+step "Plugin manifest (Omarchy's omarchy-plugin-validate)"
+bash scripts/vendor/omarchy-plugin-validate .
+
+step "Manifest identity and version"
+jq -e '.schemaVersion == 1 and .id == "brianirish.screensaver" and (.entryPoints.barWidget | length > 0)' manifest.json >/dev/null
+manifest_version=$(jq -r .version manifest.json)
+changelog_version=$(grep -m1 -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' CHANGELOG.md | tr -d '[]# ')
+if [[ $manifest_version != "$changelog_version" ]]; then
+  echo "manifest.json is $manifest_version but the newest CHANGELOG.md release is $changelog_version" >&2
+  exit 1
+fi
+echo "version $manifest_version"
+
+step "QML Text elements declare textFormat (Omarchy's scanner)"
+# The scanner walks ROOT/shell, so stage the plugin's QML under a throwaway
+# root rather than editing the vendored copy.
+stage=$(mktemp -d)
+trap 'rm -rf "$stage"' EXIT
+mkdir -p "$stage/shell"
+cp ./*.qml "$stage/shell/"
+if violations=$(python3 scripts/vendor/qml-text-format-scan.py "$stage") && [[ -z $violations ]]; then
+  echo "clean"
+else
+  printf '%s\n' "$violations" >&2
+  exit 1
+fi
+
+step "Effect list in Panel.qml and upstream.json"
+python3 scripts/sync-upstream --lint
+
+step "YAML"
+if python3 -c 'import yaml' 2>/dev/null; then
+  python3 -c "import sys, yaml; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" \
+    .github/ISSUE_TEMPLATE/*.yml .github/workflows/*.yml .github/dependabot.yml
+  echo "ok"
+else
+  echo "skipped: PyYAML not installed (CI runs it)"
+fi
+
+printf '\nAll checks passed.\n'

@@ -1,0 +1,76 @@
+name: Sync upstream
+
+# Daily: re-sync extras/omarchy-screensaver with Omarchy's stock script and
+# Panel.qml's effect list with the ttfx version Omarchy ships. Whatever moved
+# is committed to main and released. A merge conflict in the override is not
+# something a bot should settle, so that case opens an issue instead.
+#
+# Pushes made with the workflow token do not trigger ci.yml, which is why
+# scripts/check runs here before anything is committed.
+
+on:
+  schedule:
+    - cron: "23 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Sync with upstream
+        id: sync
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: scripts/sync-upstream --out-dir "$RUNNER_TEMP/sync"
+
+      - name: Check
+        if: steps.sync.outputs.changed == 'true'
+        run: scripts/check
+
+      - name: Commit and push
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          MESSAGE_FILE: ${{ steps.sync.outputs.message_file }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit --file "$MESSAGE_FILE"
+          git push origin "HEAD:$GITHUB_REF_NAME"
+
+      - name: Tag and release
+        if: steps.sync.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.sync.outputs.tag }}
+          NOTES_FILE: ${{ steps.sync.outputs.notes_file }}
+        run: |
+          git tag "$TAG"
+          git push origin "$TAG"
+          gh release create "$TAG" --title "$TAG" --notes-file "$NOTES_FILE"
+
+      - name: Open an issue for a merge conflict
+        if: steps.sync.outputs.conflict == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPORT_FILE: ${{ steps.sync.outputs.conflict_file }}
+        run: |
+          gh label create upstream-sync --color d93f0b --force \
+            --description "An upstream change the sync workflow could not apply"
+          existing=$(gh issue list --label upstream-sync --state open --json number --jq '.[0].number // empty')
+          if [[ -n $existing ]]; then
+            echo "Conflict already tracked in #$existing; not filing another."
+          else
+            gh issue create --label upstream-sync --body-file "$REPORT_FILE" \
+              --title "Stock omarchy-screensaver changed and no longer merges onto the override"
+          fi
