@@ -3,6 +3,7 @@
 [![CI](https://github.com/brianirish/omarchy-screensaver-panel/actions/workflows/ci.yml/badge.svg)](https://github.com/brianirish/omarchy-screensaver-panel/actions/workflows/ci.yml)
 [![Sync upstream](https://github.com/brianirish/omarchy-screensaver-panel/actions/workflows/sync-upstream.yml/badge.svg)](https://github.com/brianirish/omarchy-screensaver-panel/actions/workflows/sync-upstream.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Omarchy Plugin Marketplace](https://img.shields.io/badge/Omarchy_Plugin_Marketplace-listed-6f42c1)](https://omarchyplugins.com/plugin.html?id=brianirish.screensaver)
 
 A settings GUI for the [Omarchy](https://omarchy.org) screensaver — the knobs
 that were previously config-file-and-CLI only, as a native shell panel.
@@ -27,6 +28,11 @@ with:
 Everything is built from Omarchy's own UI kit, so it follows your theme.
 
 ## Install
+
+The plugin is listed on the
+[Omarchy Plugin Marketplace](https://omarchyplugins.com/plugin.html?id=brianirish.screensaver)
+as `brianirish.screensaver`. Copy the install command from the listing, or run
+it directly:
 
 ```bash
 omarchy plugin add https://github.com/brianirish/omarchy-screensaver-panel.git --enable --yes
@@ -73,6 +79,12 @@ Then reload/relog. Pinned effects are stored inline on the widget's
 > with upstream Omarchy, and the effect picker with the `ttfx` Omarchy ships,
 > and cuts a release when either changes. After `omarchy plugin update`,
 > re-run the install line above so `/usr/local/bin` has the current copy.
+>
+> The marketplace verifies one exact commit per listing, while `omarchy plugin
+> add` and `omarchy plugin update` install the current `main`. After a release
+> the listing may show *Update unverified* until the new commit is re-verified;
+> the [listing page](https://omarchyplugins.com/plugin.html?id=brianirish.screensaver)
+> names the verified commit if you want to check what you installed.
 
 ## Uninstall
 
