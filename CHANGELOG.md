@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [Omarchy Plugin Marketplace](https://omarchyplugins.com/plugin.html?id=brianirish.screensaver)
   and explains how the verified marketplace snapshot relates to what
   `omarchy plugin add` installs.
+- README notes that the project is made in Canada.
 
 ## [1.0.1] - 2026-09-06
 

@@ -5,6 +5,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Omarchy Plugin Marketplace](https://img.shields.io/badge/Omarchy_Plugin_Marketplace-listed-6f42c1)](https://omarchyplugins.com/plugin.html?id=brianirish.screensaver)
 
+**Made in Canada 🇨🇦**
+
 A settings GUI for the [Omarchy](https://omarchy.org) screensaver — the knobs
 that were previously config-file-and-CLI only, as a native shell panel.
 
