@@ -2,10 +2,10 @@
   "omarchy-screensaver": {
     "repo": "basecamp/omarchy",
     "path": "bin/omarchy-screensaver",
-    "commit": "354c2f006075c5c471a5758601a0a87966469923"
+    "commit": "7aae3f54eed03fe422cb838b4aa45a9a7d8bf2c5"
   },
   "ttfx": {
     "repo": "omacom-io/ttfx",
-    "version": "0.5.0"
+    "version": "0.5.1"
   }
 }
