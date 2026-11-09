@@ -1,15 +1,25 @@
 {
-  "omarchy-launch-screensaver": {
+  "terminal-screensaver": {
+    "repo": "basecamp/omarchy",
+    "path": "bin/omarchy-screensaver",
+    "release": "v4.5.0"
+  },
+  "launcher": {
     "repo": "basecamp/omarchy",
     "path": "bin/omarchy-launch-screensaver",
-    "commit": "8ac025e84c7e529dd6a47ebb6e92e4fec9cb11e2"
+    "release": "v4.5.0",
+    "blob": "3db5acfe9078e01fe8ca0951f818d8f76d46b0ae"
   },
-  "omarchy-screensaver": {
-    "repo": "omacom/omarchy-screensaver",
-    "version": "1.3.1"
-  },
-  "ttfx": {
+  "system-ttfx": {
     "repo": "omacom/ttfx",
     "version": "0.5.1"
+  },
+  "native-screensaver": {
+    "repo": "omacom/omarchy-screensaver",
+    "version": "1.3.1",
+    "ttfx": {
+      "repo": "omacom/ttfx",
+      "version": "0.5.1"
+    }
   }
 }
