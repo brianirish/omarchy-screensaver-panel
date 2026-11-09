@@ -1,10 +1,16 @@
 #!/bin/bash
 
-# Local override of /usr/share/omarchy/bin/omarchy-screensaver (installed to
-# /usr/local/bin so it wins PATH resolution). Identical to stock except the
-# effect rotation honors the effects pinned in the brianirish.screensaver bar
-# widget's shell.json entry. With no pinned effects, behaves exactly like
-# stock. If omarchy updates change the stock script, re-sync this copy.
+# Effect pinning for the terminal screensaver, from the brianirish.screensaver
+# panel. A copy of Omarchy's own omarchy-screensaver (Omarchy 4.5.0 runs it in
+# a terminal on every display), installed as /usr/local/bin/omarchy-screensaver
+# so it wins PATH resolution once the README's hyprland.lua PATH block puts
+# /usr/local/bin first. Identical to stock except that the random rotation is
+# limited to the effects pinned on the widget's shell.json entry; with none
+# pinned it behaves exactly like stock. scripts/sync-upstream keeps it merged
+# with the stock script of the newest Omarchy release.
+#
+# Omarchy releases with the native screensaver no longer run this script; the
+# omarchy-launch-screensaver wrapper beside it pins effects there.
 
 screensaver_in_focus() {
   hyprctl activewindow -j | jq -e '.class == "org.omarchy.screensaver"' >/dev/null 2>&1
@@ -50,6 +56,30 @@ mapfile -t pinned_effects < <(jq -r \
    | (.[0].effects // []) | if type == "array" then . else [.] end
    | map(select(type == "string" and test("^[a-z][a-z0-9-]*$"))) | .[]' \
   "$HOME/.config/omarchy/shell.json" 2>/dev/null)
+
+# ttfx won't start over an effect it doesn't know, and this loop would then
+# spin on a black screen, so drop pins this ttfx doesn't have (one a ttfx
+# update removed, say). Its --help lists each effect as a command, indented two
+# spaces. If that list can't be read, the pins go through as they are. Skips go
+# to the journal (journalctl -t omarchy-screensaver), since stderr here is the
+# screensaver's own terminal.
+if ((${#pinned_effects[@]})); then
+  known_effects=$(ttfx --help 2>/dev/null | awk '
+    /^Commands:/ { listing = 1; next }
+    listing && /^$/ { exit }
+    listing && /^  [a-z]/ && $1 ~ /^[a-z][a-z0-9-]*$/ && $1 != "help" { print $1 }')
+  if [[ -n $known_effects ]]; then
+    kept_effects=()
+    for effect in "${pinned_effects[@]}"; do
+      if [[ $'\n'$known_effects$'\n' == *$'\n'$effect$'\n'* ]]; then
+        kept_effects+=("$effect")
+      else
+        logger -t omarchy-screensaver "skipping pinned effect '$effect', which ttfx does not have" 2>/dev/null
+      fi
+    done
+    pinned_effects=("${kept_effects[@]}")
+  fi
+fi
 
 effect_args=(--random-effect)
 ((${#pinned_effects[@]})) && effect_args+=(--include-effects "${pinned_effects[@]}")

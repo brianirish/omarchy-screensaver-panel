@@ -25,10 +25,16 @@ Useful context for assessing findings:
   `omarchy plugin add`. This plugin executes only fixed `omarchy-*` commands
   plus a `jq` rewrite of `~/.config/omarchy/shell.json` whose interpolated
   inputs are pinned to known keys and integers (`saveIdle` in `Panel.qml`).
-- The optional `extras/omarchy-screensaver` override runs as the user (never
-  root). Effect names read from `shell.json` are allowlist-filtered
-  (`^[a-z][a-z0-9-]*$`, so never a leading dash) before being passed to `ttfx`, so config values cannot inject
-  flags.
+- The optional scripts in `extras/` (the `omarchy-screensaver` override and
+  the `omarchy-launch-screensaver` wrapper) are installed by root but run as
+  the user. Effect names read from `shell.json` are allowlist-filtered
+  (`^[a-z][a-z0-9-]*$`, so never a leading dash) before they reach `ttfx` or
+  the native screensaver: the override passes each as its own value after
+  `--include-effects`, the wrapper joins them into that option's single
+  value, so config values cannot inject flags or arguments. The probes that
+  list the known effects (`ttfx --help`, and the native screensaver's
+  `--headless --frames 0 --effect not-an-effect`) take no input from the
+  config.
 - The plugin handles no secrets, opens no sockets, and makes no network
   requests.
 

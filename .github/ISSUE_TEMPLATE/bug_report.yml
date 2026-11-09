@@ -1,5 +1,5 @@
 name: Bug report
-description: Something in the panel or the effect override misbehaves
+description: Something in the panel or the effect-pinning scripts misbehaves
 labels: [bug]
 body:
   - type: markdown
@@ -25,10 +25,11 @@ body:
   - type: dropdown
     id: override
     attributes:
-      label: Is the effect override installed?
+      label: Which effect-pinning scripts are installed?
       options:
-        - "Yes — /usr/local/bin/omarchy-screensaver + PATH tweak"
-        - "No — plugin only"
+        - "Both — /usr/local/bin/omarchy-screensaver and omarchy-launch-screensaver, plus the PATH block"
+        - "Only /usr/local/bin/omarchy-screensaver (as 1.x had it), plus the PATH block"
+        - "None — plugin only"
         - "Not sure"
     validations:
       required: true

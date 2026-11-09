@@ -1,0 +1,67 @@
+#!/bin/bash
+
+# Type-checks the plugin's QML against a real Omarchy shell: the qs.Ui and
+# qs.Commons components it builds on, and Quickshell's own modules. Plain
+# qmllint can't resolve those imports, so it never notices a property the
+# shell renamed or removed; this does, and fails on the warnings that mean
+# the shell would refuse to load the widget.
+#
+#   scripts/qml-api-lint [OMARCHY_SHELL_DIR]
+#
+# The shell directory defaults to $OMARCHY_SHELL_DIR, then
+# ${OMARCHY_PATH:-/usr/share/omarchy}/shell. Exits 0 with a note when no
+# shell or qmllint is available (CI provides both in its omarchy job).
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+shell_dir=${1:-${OMARCHY_SHELL_DIR:-${OMARCHY_PATH:-/usr/share/omarchy}/shell}}
+qmllint=$(command -v qmllint || true)
+[[ -n $qmllint ]] || [[ ! -x /usr/lib/qt6/bin/qmllint ]] || qmllint=/usr/lib/qt6/bin/qmllint
+
+if [[ ! -f $shell_dir/Ui/qmldir ]]; then
+  echo "skipped: no Omarchy shell at $shell_dir (set OMARCHY_SHELL_DIR)"
+  exit 0
+fi
+if [[ -z $qmllint ]]; then
+  echo "skipped: qmllint not installed"
+  exit 0
+fi
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+# qs.Ui resolves to <import root>/qs/Ui, so point a qs link at the shell.
+mkdir -p "$work/imports" "$work/src"
+ln -s "$(cd "$shell_dir" && pwd)" "$work/imports/qs"
+
+# A plugin file named like a shell type (Panel.qml) would shadow that type,
+# and qmllint then resolves the file as its own base and spins. Lint every
+# file under a Lint prefix, and point references to the plugin's other
+# components at their new names, except where the shell has a type of the
+# same name, since that is the type the file means.
+shell_types=$(awk 'NF >= 3 && $1 !~ /^(module|singleton|internal|#)/ { print $1 } $1 == "singleton" { print $2 }' \
+  "$shell_dir/Ui/qmldir" "$shell_dir/Commons/qmldir" | sort -u)
+mapfile -t files < <(find . -maxdepth 1 -name '*.qml' -printf '%f\n' | sort)
+for f in "${files[@]}"; do
+  cp "$f" "$work/src/Lint$f"
+done
+for f in "${files[@]}"; do
+  name=${f%.qml}
+  grep -qx "$name" <<<"$shell_types" && continue
+  sed -i -E "s/(^|[^A-Za-z0-9_.])$name([[:space:]]*\{)/\1Lint$name\2/g" "$work/src"/*.qml
+done
+find . -maxdepth 1 -name '*.js' -exec cp {} "$work/src/" \;
+
+# The classes that stop a widget from loading or leave it half-built:
+# assigning a property the base type doesn't have, an unset required
+# property, an import or type that doesn't resolve, overriding a FINAL
+# property, and plain syntax errors.
+fatal='Could not find property|missing required property|Failed to import|is not a type|\[unresolved-type\]|\[import\]|final member|\[syntax\]'
+out=$(cd "$work/src" && "$qmllint" -I "$work/imports" ./*.qml 2>&1 || true)
+problems=$(grep -E "$fatal" <<<"$out" | sed -E 's|\./Lint|./|g' || true)
+if [[ -n $problems ]]; then
+  printf '%s\n' "$problems" >&2
+  exit 1
+fi
+echo "clean against $shell_dir"

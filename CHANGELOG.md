@@ -5,6 +5,67 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-11-09
+
+For Omarchy 4.5 and later; on Omarchy 4.0, stay on 1.0.3. Effect pinning now
+covers both screensavers Omarchy has: the terminal one that Omarchy 4.5.0
+runs, and the native overlay that Omarchy's development branch switched to
+for a later release. Install both scripts in `extras/` and keep the
+`hyprland.lua` PATH block, as the README shows.
+
+### Added
+
+- `extras/omarchy-launch-screensaver`, a wrapper for Omarchy's
+  `omarchy-launch-screensaver`, installed to `/usr/local/bin` beside the
+  override. Where the native screensaver is installed, it hands the pinned
+  effects to Omarchy's own launcher as `--include-effects`, read afresh at
+  each launch; where it isn't (Omarchy 4.5.0), it hands straight off and
+  changes nothing.
+- Translations. Every string the panel shows, the effect names and
+  descriptions included, comes from catalogs in `i18n/` through Omarchy's
+  `Commons.Translations` and follows _Setup > Language_ without a restart,
+  numbers in the language's digits, in all 50 Omarchy languages. English is
+  the source; the other catalogs are machine-translated, and corrections are
+  welcome.
+- `scripts/qml-api-lint` type-checks the panel against Omarchy's own shell
+  components, in `scripts/check` and in a CI job against Omarchy v4.5.0, plus
+  a weekly run against the newest release. `scripts/check` also runs
+  `scripts/test-override`, `scripts/test-launcher`, `scripts/test-sync`, and
+  the new Node tests for `Model.js` and the catalogs.
+
+### Changed
+
+- `extras/omarchy-screensaver` matches Omarchy 4.5.0's stock script, which
+  stops the key that ends the screensaver from echoing into the corner
+  (`stty -echo`). It also skips a pinned effect the installed `ttfx` doesn't
+  list (it asks `ttfx --help`), which used to keep the screensaver from
+  starting at all; skips are logged to the journal. Reinstall it.
+- The daily `sync-upstream` workflow follows the newest Omarchy release
+  instead of the development branch, where `bin/omarchy-screensaver` was
+  deleted and which failed every run since 2026-10-28. It merges the
+  release's stock script into the override, watches the launcher the wrapper
+  hands off to, and keeps the effect picker to the effects both the `ttfx`
+  package and the native screensaver's built-in `ttfx` have. A merge
+  conflict, a launcher change or a release without the terminal screensaver
+  opens an issue; nothing crashes the job, and one part failing doesn't stop
+  the others.
+- The effect list moves from `Panel.qml` to `Model.js`, with its text in
+  `i18n/en.json`.
+- The `effects` setting reads a single effect name as one pin, as
+  `omarchy bar set` stores it without `--json`, and the effect picker follows
+  the setting when it changes outside the panel.
+
+### Fixed
+
+- The README no longer warns that pinning is broken on Omarchy 4.5. That
+  notice, added on `main` after 1.0.3, assumed 4.5.0 shipped the native
+  screensaver, but 4.5.0 still runs the terminal one, and the 1.x override
+  keeps pinning there.
+
+### Removed
+
+- Support for Omarchy 4.0; stay on 1.0.3 there.
+
 ## [1.0.3] - 2026-10-25
 
 ### Changed
@@ -67,6 +128,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stock launcher script that honors pinned effects via `--include-effects`,
   with allowlist filtering of effect names read from config
 
+[2.0.0]: https://github.com/brianirish/omarchy-screensaver-panel/releases/tag/v2.0.0
 [1.0.3]: https://github.com/brianirish/omarchy-screensaver-panel/releases/tag/v1.0.3
 [1.0.2]: https://github.com/brianirish/omarchy-screensaver-panel/releases/tag/v1.0.2
 [1.0.1]: https://github.com/brianirish/omarchy-screensaver-panel/releases/tag/v1.0.1
