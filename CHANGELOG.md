@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.0] - 2026-11-08
+## [2.0.0] - 2026-11-09
 
 For Omarchy 4.5 and later; on Omarchy 4.0, stay on 1.0.3. Effect pinning now
 covers both screensavers Omarchy has: the terminal one that Omarchy 4.5.0
@@ -24,8 +24,9 @@ for a later release. Install both scripts in `extras/` and keep the
 - Translations. Every string the panel shows, the effect names and
   descriptions included, comes from catalogs in `i18n/` through Omarchy's
   `Commons.Translations` and follows _Setup > Language_ without a restart,
-  numbers in the language's digits. English ships first; the other languages
-  follow as machine translations.
+  numbers in the language's digits, in all 50 Omarchy languages. English is
+  the source; the other catalogs are machine-translated, and corrections are
+  welcome.
 - `scripts/qml-api-lint` type-checks the panel against Omarchy's own shell
   components, in `scripts/check` and in a CI job against Omarchy v4.5.0, plus
   a weekly run against the newest release. `scripts/check` also runs
@@ -53,6 +54,13 @@ for a later release. Install both scripts in `extras/` and keep the
 - The `effects` setting reads a single effect name as one pin, as
   `omarchy bar set` stores it without `--json`, and the effect picker follows
   the setting when it changes outside the panel.
+
+### Fixed
+
+- The README no longer warns that pinning is broken on Omarchy 4.5. That
+  notice, added on `main` after 1.0.3, assumed 4.5.0 shipped the native
+  screensaver, but 4.5.0 still runs the terminal one, and the 1.x override
+  keeps pinning there.
 
 ### Removed
 
