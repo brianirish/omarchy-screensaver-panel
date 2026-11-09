@@ -7,36 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.0.0] - 2026-11-08
 
-Omarchy 4.5 replaced the terminal screensaver with the native
-`omarchy-screensaver` overlay and removed the `bin/omarchy-screensaver` script
-that 1.x overrode, so effect pinning stopped working and the daily sync failed
-on every run since 2026-10-28.
+For Omarchy 4.5 and later; on Omarchy 4.0, stay on 1.0.3. Effect pinning now
+covers both screensavers Omarchy has: the terminal one that Omarchy 4.5.0
+runs, and the native overlay that Omarchy's development branch switched to
+for a later release. Install both scripts in `extras/` and keep the
+`hyprland.lua` PATH block, as the README shows.
+
+### Added
+
+- `extras/omarchy-launch-screensaver`, a wrapper for Omarchy's
+  `omarchy-launch-screensaver`, installed to `/usr/local/bin` beside the
+  override. Where the native screensaver is installed, it hands the pinned
+  effects to Omarchy's own launcher as `--include-effects`, read afresh at
+  each launch; where it isn't (Omarchy 4.5.0), it hands straight off and
+  changes nothing.
+- Translations. Every string the panel shows, the effect names and
+  descriptions included, comes from catalogs in `i18n/` through Omarchy's
+  `Commons.Translations` and follows _Setup > Language_ without a restart,
+  numbers in the language's digits. English ships first; the other languages
+  follow as machine translations.
+- `scripts/qml-api-lint` type-checks the panel against Omarchy's own shell
+  components, in `scripts/check` and in a CI job against Omarchy v4.5.0, plus
+  a weekly run against the newest release. `scripts/check` also runs
+  `scripts/test-override`, `scripts/test-launcher`, `scripts/test-sync`, and
+  the new Node tests for `Model.js` and the catalogs.
 
 ### Changed
 
-- Effect pinning now works through `extras/omarchy-launch-screensaver`, a thin
-  wrapper installed to `/usr/local/bin` that hands pinned effects to Omarchy's
-  own launcher as `--include-effects`. No PATH changes are needed: Omarchy 4.5
-  no longer puts its bin directory ahead of `/usr/local/bin`. Pins apply to the
-  next screensaver without a relog, and a pin the installed screensaver doesn't
-  know is skipped instead of keeping it from starting.
-- The daily `sync-upstream` workflow follows the effect list of the `ttfx`
-  that the `omarchy-screensaver` package bundles (its PKGBUILD's version, then
-  the ttfx tag in its `Cargo.toml`), and watches Omarchy's
-  `omarchy-launch-screensaver`. Any change to the launcher, its removal
-  included, opens an issue, as does upstream moving something the sync reads;
-  one half failing no longer stops the other, and nothing crashes the job.
-  `scripts/sync-upstream --accept-launcher` records a reviewed launcher commit.
-- `scripts/check` runs new tests for the wrapper (`scripts/test-launcher`) and
-  the sync (`scripts/test-sync`).
+- `extras/omarchy-screensaver` matches Omarchy 4.5.0's stock script, which
+  stops the key that ends the screensaver from echoing into the corner
+  (`stty -echo`). It also skips a pinned effect the installed `ttfx` doesn't
+  list (it asks `ttfx --help`), which used to keep the screensaver from
+  starting at all; skips are logged to the journal. Reinstall it.
+- The daily `sync-upstream` workflow follows the newest Omarchy release
+  instead of the development branch, where `bin/omarchy-screensaver` was
+  deleted and which failed every run since 2026-10-28. It merges the
+  release's stock script into the override, watches the launcher the wrapper
+  hands off to, and keeps the effect picker to the effects both the `ttfx`
+  package and the native screensaver's built-in `ttfx` have. A merge
+  conflict, a launcher change or a release without the terminal screensaver
+  opens an issue; nothing crashes the job, and one part failing doesn't stop
+  the others.
+- The effect list moves from `Panel.qml` to `Model.js`, with its text in
+  `i18n/en.json`.
+- The `effects` setting reads a single effect name as one pin, as
+  `omarchy bar set` stores it without `--json`, and the effect picker follows
+  the setting when it changes outside the panel.
 
 ### Removed
 
-- Support for Omarchy 3.x; stay on 1.0.3 there.
-- `extras/omarchy-screensaver`, its `.stock` merge base, and the
-  `hyprland.lua` PATH block 1.x asked for. Upgrading:
-  `sudo rm -f /usr/local/bin/omarchy-screensaver`, drop the PATH block, and
-  install the wrapper as the README shows.
+- Support for Omarchy 4.0; stay on 1.0.3 there.
 
 ## [1.0.3] - 2026-10-25
 
