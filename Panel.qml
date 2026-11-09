@@ -2,15 +2,21 @@ import QtQuick
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
+import "Model.js" as Model
 
 // Screensaver settings panel: availability toggle, idle timings, a picker
 // limiting which ttfx effects the random rotation uses, and branding actions.
-// Pinned effects are honored by the omarchy-launch-screensaver wrapper in
-// /usr/local/bin, which reads them back out of this widget's shell.json entry.
+// Pinned effects are honored by the two scripts in extras/, installed to
+// /usr/local/bin: the omarchy-screensaver override for the terminal
+// screensaver Omarchy 4.5.0 runs, and the omarchy-launch-screensaver wrapper
+// for the native one that replaces it. Both read the pins back out of this
+// widget's shell.json entry.
 Panel {
   id: root
   moduleName: "brianirish.screensaver"
   ipcTarget: "brianirish.screensaver"
+
+  Translations { id: strings; directory: Qt.resolvedUrl("i18n") }
 
   property bool screensaverEnabled: true
   property int screensaverSeconds: 150
@@ -18,60 +24,14 @@ Panel {
   property int liveScreensaverSeconds: screensaverSeconds
   property int liveLockSeconds: lockSeconds
 
-  readonly property var effects: setting("effects", [])
+  // Bindings, so a settings change or a language switch shows at once.
+  readonly property var effects: Model.pinnedEffects(setting("effects", []))
+  readonly property var effectOptions: Model.effectOptions(strings)
+  readonly property string statusText:
+    Model.status(screensaverEnabled, effects.length, effectOptions.length, strings, v => I18n.formatNumber(v))
 
-  readonly property var effectOptions: [
-    { value: "beams", label: "Beams", description: "Beams travel over the canvas illuminating characters" },
-    { value: "binarypath", label: "Binary Path", description: "Binary representations move toward each character's home" },
-    { value: "blackhole", label: "Black Hole", description: "Characters consumed by a black hole, then explode outward" },
-    { value: "bouncyballs", label: "Bouncy Balls", description: "Characters fall as bouncy balls from the top" },
-    { value: "bubbles", label: "Bubbles", description: "Characters form bubbles that float down and pop" },
-    { value: "burn", label: "Burn", description: "Burns vertically up the canvas" },
-    { value: "colorshift", label: "Color Shift", description: "A gradient shifts colors across the terminal" },
-    { value: "crumble", label: "Crumble", description: "Characters crumble to dust, get vacuumed up, reform" },
-    { value: "decrypt", label: "Decrypt", description: "Movie-style decryption effect" },
-    { value: "errorcorrect", label: "Error Correct", description: "Misplaced characters get corrected in sequence" },
-    { value: "expand", label: "Expand", description: "Text expands from a single point" },
-    { value: "fireworks", label: "Fireworks", description: "Characters launch, explode, and fall into place" },
-    { value: "highlight", label: "Highlight", description: "A specular highlight runs across the text" },
-    { value: "laseretch", label: "Laser Etch", description: "A laser etches characters onto the terminal" },
-    { value: "matrix", label: "Matrix", description: "Matrix digital rain" },
-    { value: "middleout", label: "Middle Out", description: "Text expands from the middle row/column outward" },
-    { value: "orbittingvolley", label: "Orbiting Volley", description: "Orbiting launchers fire characters inward" },
-    { value: "overflow", label: "Overflow", description: "Text overflows and scrolls until it appears ordered" },
-    { value: "pour", label: "Pour", description: "Characters pour into position from one direction" },
-    { value: "print", label: "Print", description: "Lines printed one at a time by a print head" },
-    { value: "rain", label: "Rain", description: "Characters rain from the top of the canvas" },
-    { value: "randomsequence", label: "Random Sequence", description: "Input printed in a random sequence" },
-    { value: "rings", label: "Rings", description: "Characters disperse into spinning rings" },
-    { value: "scattered", label: "Scattered", description: "Text scatters, then moves into position" },
-    { value: "slice", label: "Slice", description: "Input slices in half and slides together" },
-    { value: "slide", label: "Slide", description: "Characters slide in from outside the terminal" },
-    { value: "smoke", label: "Smoke", description: "Smoke floods the canvas colorizing characters" },
-    { value: "spotlights", label: "Spotlights", description: "Spotlights search the text, converge, and expand" },
-    { value: "spray", label: "Spray", description: "Characters spawn at varying rates from a single point" },
-    { value: "swarm", label: "Swarm", description: "Character swarms roam before settling into place" },
-    { value: "sweep", label: "Sweep", description: "A sweep reveals uncolored text, a reverse sweep colors it" },
-    { value: "synthgrid", label: "Synth Grid", description: "A grid fills with characters dissolving into the text" },
-    { value: "thunderstorm", label: "Thunderstorm", description: "A thunderstorm in the terminal" },
-    { value: "unstable", label: "Unstable", description: "Characters explode to the edges, then reassemble" },
-    { value: "vhstape", label: "VHS Tape", description: "Lines glitch and lose detail like an old VHS tape" },
-    { value: "waves", label: "Waves", description: "Waves travel across, leaving characters behind" },
-    { value: "wipe", label: "Wipe", description: "A wipe across the terminal reveals characters" }
-  ]
-
-  readonly property string statusText: {
-    if (!screensaverEnabled) return "DISABLED"
-    if (effects.length === 1) return "1 EFFECT PINNED"
-    if (effects.length > 0) return effects.length + " OF " + effectOptions.length + " EFFECTS"
-    return "ALL EFFECTS · RANDOM"
-  }
-
-  function fmtSeconds(s) {
-    if (s < 60) return s + "s"
-    var m = Math.floor(s / 60)
-    var r = s % 60
-    return r === 0 ? m + "m" : m + "m " + r + "s"
+  function duration(seconds) {
+    return Model.duration(seconds, strings, v => I18n.formatNumber(v))
   }
 
   function refresh() {
@@ -95,6 +55,10 @@ Panel {
   }
 
   onOpenedChanged: if (opened) refresh()
+  // MultiSelect sets its own values when clicked, which ends the values
+  // binding below; push the setting back in whenever it changes, so a change
+  // made outside the panel (omarchy bar set, an edit to shell.json) shows.
+  onEffectsChanged: effectSelect.values = root.effects
 
   visible: true
   implicitWidth: button.implicitWidth
@@ -140,7 +104,7 @@ Panel {
     bar: root.bar
     text: "󱄄"
     slotSize: Style.bar.iconSlot
-    tooltipText: root.opened ? "" : "Screensaver"
+    tooltipText: root.opened ? "" : strings.t("title")
     onPressed: function(b) {
       if (b === Qt.RightButton) toggleProc.running = true
       else root.toggle()
@@ -199,7 +163,7 @@ Panel {
             Text {
 
               textFormat: Text.PlainText
-              text: "Screensaver"
+              text: strings.t("title")
               color: root.bar.foreground
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.title
@@ -211,7 +175,7 @@ Panel {
             Text {
 
               textFormat: Text.PlainText
-              text: root.statusText
+              text: root.statusText.toUpperCase()
               color: Qt.darker(root.bar.foreground, 1.4)
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption
@@ -227,7 +191,7 @@ Panel {
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             iconText: ""
-            text: "Preview"
+            text: strings.t("preview")
             fontSize: Style.font.bodySmall
             foreground: root.bar.foreground
             fontFamily: root.bar.fontFamily
@@ -243,8 +207,8 @@ Panel {
 
         Toggle {
           width: parent.width
-          label: "Enabled"
-          description: "Start the screensaver when the system idles"
+          label: strings.t("enabled.label")
+          description: strings.t("enabled.description")
           checked: root.screensaverEnabled
           foreground: root.bar.foreground
           fontFamily: root.bar.fontFamily
@@ -259,14 +223,14 @@ Panel {
           spacing: Style.space(10)
 
           PanelSectionHeader {
-            text: "IDLE TIMING"
+            text: strings.t("section.idle")
             foreground: root.bar.foreground
             fontFamily: root.bar.fontFamily
           }
 
           TimingRow {
-            label: "Screensaver after"
-            valueText: root.fmtSeconds(root.liveScreensaverSeconds)
+            label: strings.t("idle.screensaver")
+            valueText: root.duration(root.liveScreensaverSeconds)
             stops: [30, 60, 90, 120, 150, 180, 240, 300, 420, 600, 900, 1200, 1800]
             value: root.screensaverSeconds
             onMovedTo: function(v) { root.liveScreensaverSeconds = v }
@@ -277,8 +241,8 @@ Panel {
           }
 
           TimingRow {
-            label: "Lock after"
-            valueText: root.fmtSeconds(root.liveLockSeconds)
+            label: strings.t("idle.lock")
+            valueText: root.duration(root.liveLockSeconds)
             stops: [60, 120, 180, 300, 600, 900, 1200, 1800, 2700, 3600]
             value: root.lockSeconds
             onMovedTo: function(v) { root.liveLockSeconds = v }
@@ -297,7 +261,7 @@ Panel {
           spacing: Style.space(10)
 
           PanelSectionHeader {
-            text: "EFFECTS"
+            text: strings.t("section.effects")
             foreground: root.bar.foreground
             fontFamily: root.bar.fontFamily
           }
@@ -308,8 +272,8 @@ Panel {
             showLabel: false
             options: root.effectOptions
             values: root.effects
-            placeholderText: "Search effects..."
-            noSelectionText: "All effects (random)"
+            placeholderText: strings.t("effects.search")
+            noSelectionText: strings.t("effects.none")
             fontFamily: root.bar.fontFamily
             onChanged: function(vals) { root.saveEffects(vals) }
           }
@@ -323,33 +287,26 @@ Panel {
 
             Button {
               width: effectActions.cellWidth
-              text: "Select all"
+              text: strings.t("effects.selectAll")
               fontSize: Style.font.bodySmall
               foreground: root.bar.foreground
               fontFamily: root.bar.fontFamily
               bordered: true
               horizontalPadding: Style.spacing.controlPaddingX
               verticalPadding: Style.spacing.controlPaddingY
-              onClicked: {
-                var all = root.effectOptions.map(function(o) { return o.value })
-                effectSelect.values = all
-                root.saveEffects(all)
-              }
+              onClicked: root.saveEffects(root.effectOptions.map(function(o) { return o.value }))
             }
 
             Button {
               width: effectActions.cellWidth
-              text: "Clear"
+              text: strings.t("effects.clear")
               fontSize: Style.font.bodySmall
               foreground: root.bar.foreground
               fontFamily: root.bar.fontFamily
               bordered: true
               horizontalPadding: Style.spacing.controlPaddingX
               verticalPadding: Style.spacing.controlPaddingY
-              onClicked: {
-                effectSelect.values = []
-                root.saveEffects([])
-              }
+              onClicked: root.saveEffects([])
             }
           }
 
@@ -357,7 +314,7 @@ Panel {
 
             textFormat: Text.PlainText
             width: parent.width
-            text: "Pick which effects the random rotation may use. None selected means all of them."
+            text: strings.t("effects.help")
             color: root.bar.foreground
             opacity: 0.6
             font.family: root.bar.fontFamily
@@ -374,7 +331,7 @@ Panel {
           spacing: Style.space(10)
 
           PanelSectionHeader {
-            text: "ARTWORK"
+            text: strings.t("section.artwork")
             foreground: root.bar.foreground
             fontFamily: root.bar.fontFamily
           }
@@ -388,17 +345,17 @@ Panel {
 
             BrandingButton {
               iconText: ""
-              text: "Edit text"
+              text: strings.t("artwork.text")
               command: "omarchy-branding-screensaver text"
             }
             BrandingButton {
               iconText: ""
-              text: "From image"
+              text: strings.t("artwork.image")
               command: "omarchy-branding-screensaver image"
             }
             BrandingButton {
               iconText: ""
-              text: "Reset"
+              text: strings.t("artwork.reset")
               command: "omarchy-branding-screensaver reset"
             }
           }
@@ -407,7 +364,7 @@ Panel {
 
             textFormat: Text.PlainText
             width: parent.width
-            text: "Text opens the ASCII art in your editor; image converts a PNG/SVG. Either way the result previews immediately."
+            text: strings.t("artwork.help")
             color: root.bar.foreground
             opacity: 0.6
             font.family: root.bar.fontFamily

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Keep the plugin in step with the upstreams it depends on.
 
-Panel.qml lists every ttfx effect. Omarchy's screensaver is the native
-omarchy-screensaver binary, packaged in omacom-io/omarchy-pkgs, and it renders
-the ttfx it pins in its Cargo.toml in process. So the list is compared against
-src/effects/mod.rs of that ttfx tag: effects ttfx gained are added with the
-label and description the registry gives them, effects it dropped are removed,
-and entries that already exist keep their hand-written label and description.
+Model.js lists every ttfx effect, with its English label and description in
+i18n/en.json. Omarchy's screensaver is the native omarchy-screensaver binary,
+packaged in omacom-io/omarchy-pkgs, and it renders the ttfx it pins in its
+Cargo.toml in process. So the list is compared against src/effects/mod.rs of
+that ttfx tag: effects ttfx gained are added with the label and description
+the registry gives them, effects it dropped are removed from Model.js and
+every catalog, and entries that already exist keep their hand-written text.
 When the list moves, the version in manifest.json gets a minor bump,
 CHANGELOG.md and README.md are updated, and release notes plus a commit message
 are written for the workflow to use. A new package or ttfx version that changes
@@ -28,9 +29,9 @@ Usage:
   scripts/sync-upstream --accept-launcher
   scripts/sync-upstream --lint
 
---lint is offline: Panel.qml's effect list must be sorted, unique, in the exact
-form this script writes, with names the wrapper's allowlist accepts, and
-README.md's effect count must match. --registry, --ttfx-version,
+--lint is offline: Model.js's effect list and i18n/en.json must be sorted,
+unique, in the exact form this script writes, with names the wrapper's
+allowlist accepts, and README.md's effect count must match. --registry, --ttfx-version,
 --screensaver-version and --launcher-commit stand in for the network, for tests.
 
 Outputs, appended to $GITHUB_OUTPUT when set and always printed:
@@ -56,7 +57,9 @@ PKGBUILD_PATH = "pkgbuilds/omarchy-screensaver/PKGBUILD"
 REGISTRY_PATH = "src/effects/mod.rs"
 
 WRAPPER = ROOT / "extras/omarchy-launch-screensaver"
-PANEL = ROOT / "Panel.qml"
+MODEL = ROOT / "Model.js"
+I18N = ROOT / "i18n"
+ENGLISH = I18N / "en.json"
 MANIFEST = ROOT / "manifest.json"
 CHANGELOG = ROOT / "CHANGELOG.md"
 README = ROOT / "README.md"
@@ -235,49 +238,96 @@ def parse_registry(text):
     return effects
 
 
-BLOCK_OPEN = "  readonly property var effectOptions: [\n"
-BLOCK_CLOSE = "\n  ]\n"
-QML_STRING = r'"(?:[^"\\]|\\.)*"'
+# The effect list is two halves: Model.js's effectOptions holds one line per
+# effect naming its value and its two catalog keys, and i18n/en.json holds the
+# English label and description under those keys. Both are kept sorted, so a
+# sync's diff is only the effects that moved.
+BLOCK_OPEN = "function effectOptions(tr) {\n  return [\n"
+BLOCK_CLOSE = "\n  ]\n}"
 ENTRY = re.compile(
-    rf'^    \{{ value: ({QML_STRING}), label: ({QML_STRING}), description: ({QML_STRING}) \}},?$')
+    r'^    \{ value: "([a-z][a-z0-9-]*)", label: tr\.t\("effect\.([a-z0-9-]+)\.name"\), '
+    r'description: tr\.t\("effect\.([a-z0-9-]+)\.description"\) \},?$')
 
 
-def qml_string(value):
-    return json.dumps(value, ensure_ascii=False)
+def label_key(name):
+    return f"effect.{name}.name"
 
 
-def panel_block(text):
-    """Span of the entries inside Panel.qml's effectOptions array."""
+def description_key(name):
+    return f"effect.{name}.description"
+
+
+def model_block(text):
+    """Span of the entries inside Model.js's effectOptions list."""
     start = text.find(BLOCK_OPEN)
     if start < 0:
-        raise SystemExit("Panel.qml has no effectOptions block")
+        raise SystemExit("Model.js has no effectOptions list")
     start += len(BLOCK_OPEN)
     end = text.find(BLOCK_CLOSE, start)
     if end < 0:
-        raise SystemExit("Panel.qml effectOptions block is unterminated")
+        raise SystemExit("Model.js effectOptions list is unterminated")
     return start, end
 
 
-def parse_panel(text):
-    start, end = panel_block(text)
+def parse_effects(model_text, english):
+    """The effects Model.js lists, with their English label and description."""
+    start, end = model_block(model_text)
     effects = {}
-    for line in text[start:end].split("\n"):
+    for line in model_text[start:end].split("\n"):
         match = ENTRY.match(line)
-        if not match:
+        if not match or len(set(match.groups())) != 1:
             raise SystemExit(
-                f"Panel.qml effect entry is not in the form this script writes: {line.strip()!r}")
-        value, label, description = (json.loads(group) for group in match.groups())
-        if value in effects:
-            raise SystemExit(f"Panel.qml lists {value!r} twice")
-        effects[value] = {"value": value, "label": label, "description": description}
+                f"Model.js effect entry is not in the form this script writes: {line.strip()!r}")
+        name = match.group(1)
+        if name in effects:
+            raise SystemExit(f"Model.js lists {name!r} twice")
+        label, description = english.get(label_key(name)), english.get(description_key(name))
+        if not isinstance(label, str) or not isinstance(description, str):
+            raise SystemExit(f"i18n/en.json has no {label_key(name)} or {description_key(name)}")
+        effects[name] = {"value": name, "label": label, "description": description}
     return effects
 
 
-def render_panel(effects):
+def render_effects(effects):
     return ",\n".join(
-        f"    {{ value: {qml_string(e['value'])}, label: {qml_string(e['label'])}, "
-        f"description: {qml_string(e['description'])} }}"
-        for e in sorted(effects.values(), key=lambda e: e["value"]))
+        f'    {{ value: "{name}", label: tr.t("{label_key(name)}"), '
+        f'description: tr.t("{description_key(name)}") }}'
+        for name in sorted(effects))
+
+
+def render_catalog(catalog):
+    return json.dumps(catalog, indent=2, ensure_ascii=False) + "\n"
+
+
+def read_catalog(path):
+    return json.loads(path.read_text())
+
+
+def effect_writes(effects, added, removed):
+    """New text for Model.js and every catalog, once the list is `effects`.
+
+    Added effects take the registry's label and description in en.json; the
+    other languages fall back to English until they are translated. Removed
+    effects lose their keys from every catalog, since tests/i18n_test.js fails
+    on a key the code no longer asks for.
+    """
+    writes = {}
+    model_text = MODEL.read_text()
+    start, end = model_block(model_text)
+    writes[MODEL] = model_text[:start] + render_effects(effects) + model_text[end:]
+    gone = {key for name in removed for key in (label_key(name), description_key(name))}
+    for path in sorted(I18N.glob("*.json")):
+        catalog = read_catalog(path)
+        catalog = {k: v for k, v in catalog.items() if k not in gone}
+        if path == ENGLISH:
+            for name in added:
+                catalog[label_key(name)] = effects[name]["label"]
+                catalog[description_key(name)] = effects[name]["description"]
+            catalog = dict(sorted(catalog.items()))
+        text = render_catalog(catalog)
+        if text != path.read_text():
+            writes[path] = text
+    return writes
 
 
 # ------------------------------------------------------------- versioning
@@ -329,15 +379,16 @@ def commit_message(title, version, sections):
 # ------------------------------------------------------------------- lint
 
 def lint():
-    text = PANEL.read_text()
-    effects = parse_panel(text)
-    start, end = panel_block(text)
-    if text[start:end] != render_panel(effects):
-        raise SystemExit("Panel.qml effect entries must be sorted by value, one per line, "
+    english = read_catalog(ENGLISH)
+    if ENGLISH.read_text() != render_catalog(dict(sorted(english.items()))):
+        raise SystemExit("i18n/en.json must be sorted by key with two-space indents, "
+                         "the form scripts/sync-upstream writes")
+    text = MODEL.read_text()
+    effects = parse_effects(text, english)
+    start, end = model_block(text)
+    if text[start:end] != render_effects(effects):
+        raise SystemExit("Model.js effect entries must be sorted by value, one per line, "
                          "in the form scripts/sync-upstream writes")
-    for name in effects:
-        if not EFFECT_NAME.match(name):
-            raise SystemExit(f"Panel.qml effect {name!r} would not pass the wrapper's allowlist")
     if f'test("{EFFECT_NAME_PATTERN}")' not in WRAPPER.read_text():
         raise SystemExit(f"{WRAPPER.relative_to(ROOT)} no longer filters effect names with "
                          f"{EFFECT_NAME_PATTERN}; keep it and EFFECT_NAME_PATTERN in step")
@@ -345,7 +396,7 @@ def lint():
     if not match:
         raise SystemExit("README.md no longer says how many `ttfx` effects there are")
     if int(match.group(1)) != len(effects):
-        raise SystemExit(f"README.md says {match.group(1)} ttfx effects; Panel.qml lists {len(effects)}")
+        raise SystemExit(f"README.md says {match.group(1)} ttfx effects; Model.js lists {len(effects)}")
     lock = json.loads(LOCK.read_text())
     try:
         launcher = lock["omarchy-launch-screensaver"]
@@ -430,16 +481,14 @@ def main():
     except Problem as problem:
         reports.append(("Upstream sync can't read the ttfx effect list", f"{problem}\n"))
     else:
-        panel_text = PANEL.read_text()
-        current = parse_panel(panel_text)
+        current = parse_effects(MODEL.read_text(), read_catalog(ENGLISH))
         added = sorted(set(upstream) - set(current))
         removed = sorted(set(current) - set(upstream))
         source = f"ttfx {ttfx_version} (omarchy-screensaver {screensaver_version})"
         if added or removed:
             effects = {k: v for k, v in current.items() if k in upstream}
             effects.update((k, upstream[k]) for k in added)
-            start, end = panel_block(panel_text)
-            writes[PANEL] = panel_text[:start] + render_panel(effects) + panel_text[end:]
+            writes.update(effect_writes(effects, added, removed))
             readme, count = README_COUNT.subn(f"{len(effects)} `ttfx` effects", README.read_text(), count=1)
             if count:
                 writes[README] = readme

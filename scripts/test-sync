@@ -15,13 +15,13 @@ lock_commit=$(jq -r '."omarchy-launch-screensaver".commit' upstream.json)
 screensaver_version=$(jq -r '."omarchy-screensaver".version' upstream.json)
 ttfx_version=$(jq -r .ttfx.version upstream.json)
 
-# registry EXTRA DROP: a ttfx src/effects/mod.rs with Panel.qml's effects,
+# registry EXTRA DROP: a ttfx src/effects/mod.rs with Model.js's effects,
 # minus DROP, plus EXTRA (a lowercase name, documented as "Something new.").
 registry() {
   python3 - "$1" "$2" <<'EOF'
 import re, sys
 extra, drop = sys.argv[1], sys.argv[2]
-names = re.findall(r'^    \{ value: "([a-z0-9-]+)"', open("Panel.qml").read(), re.M)
+names = re.findall(r'^    \{ value: "([a-z0-9-]+)"', open("Model.js").read(), re.M)
 names = [n for n in names if n != drop] + ([extra] if extra else [])
 print("pub enum EffectCommand {")
 for n in names:
@@ -38,7 +38,10 @@ sync() {
   local name=$1 text=$2
   shift 2
   mkdir -p "$tmp/$name/scripts" "$tmp/$name/extras"
-  cp Panel.qml README.md manifest.json CHANGELOG.md upstream.json "$tmp/$name/"
+  cp Model.js README.md manifest.json CHANGELOG.md upstream.json "$tmp/$name/"
+  cp -r i18n "$tmp/$name/"
+  # A translated catalog, to see a dropped effect leave every language.
+  printf '{\n  "effect.wipe.name": "Balayage",\n  "title": "Économiseur"\n}\n' >"$tmp/$name/i18n/fr.json"
   cp scripts/sync-upstream "$tmp/$name/scripts/"
   cp extras/omarchy-launch-screensaver "$tmp/$name/extras/"
   printf '%s\n' "$text" >"$tmp/$name/registry.rs"
@@ -68,10 +71,15 @@ expect "unchanged upstream: nothing to do" "false false false" \
 sync moved "$(registry "newfx" "wipe")"
 expect "an effect added and one dropped: changed, released" "true true" \
   "$(output moved changed) $(output moved release)"
-expect "the new effect lands with the registry's label and description" \
-  '    { value: "newfx", label: "New Fx", description: "Something new" },' \
-  "$(grep '"newfx"' "$tmp/moved/Panel.qml")"
-expect "the dropped effect is gone" "0" "$(grep -c '"wipe"' "$tmp/moved/Panel.qml" || true)"
+expect "the new effect lands in Model.js" \
+  '    { value: "newfx", label: tr.t("effect.newfx.name"), description: tr.t("effect.newfx.description") },' \
+  "$(grep '"newfx"' "$tmp/moved/Model.js")"
+expect "with the registry's label and description in en.json" "New Fx|Something new" \
+  "$(jq -r '[."effect.newfx.name", ."effect.newfx.description"] | join("|")' "$tmp/moved/i18n/en.json")"
+expect "the dropped effect is gone from Model.js" "0" "$(grep -c '"wipe"' "$tmp/moved/Model.js" || true)"
+expect "and from every catalog" "0 0" \
+  "$(grep -c 'effect.wipe' "$tmp/moved/i18n/en.json" || true) $(grep -c 'effect.wipe' "$tmp/moved/i18n/fr.json" || true)"
+expect "the rest of a translated catalog stays" "Économiseur" "$(jq -r .title "$tmp/moved/i18n/fr.json")"
 expect "minor version bump in manifest.json" \
   "$(jq -r .version manifest.json | awk -F. '{print $1"."$2+1".0"}')" "$(jq -r .version "$tmp/moved/manifest.json")"
 expect "the result passes --lint" "0" "$(cd "$tmp/moved" && python3 scripts/sync-upstream --lint >/dev/null 2>&1; echo $?)"
@@ -81,7 +89,7 @@ sync bumped "$(registry "" "")" --screensaver-version 9.9.9
 expect "a new package version alone: recorded, not released" "true false" \
   "$(output bumped changed) $(output bumped release)"
 expect "upstream.json records it" "9.9.9" "$(jq -r '."omarchy-screensaver".version' "$tmp/bumped/upstream.json")"
-expect "the Panel is untouched" "" "$(diff Panel.qml "$tmp/bumped/Panel.qml")"
+expect "the effect list is untouched" "" "$(diff Model.js "$tmp/bumped/Model.js"; diff i18n/en.json "$tmp/bumped/i18n/en.json")"
 
 sync drift "$(registry "" "")" --launcher-commit 0123456789abcdef0123456789abcdef01234567
 expect "an upstream launcher change: attention, nothing written" "true false" \
