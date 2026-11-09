@@ -5,6 +5,39 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-11-08
+
+Omarchy 4.5 replaced the terminal screensaver with the native
+`omarchy-screensaver` overlay and removed the `bin/omarchy-screensaver` script
+that 1.x overrode, so effect pinning stopped working and the daily sync failed
+on every run since 2026-10-28.
+
+### Changed
+
+- Effect pinning now works through `extras/omarchy-launch-screensaver`, a thin
+  wrapper installed to `/usr/local/bin` that hands pinned effects to Omarchy's
+  own launcher as `--include-effects`. No PATH changes are needed: Omarchy 4.5
+  no longer puts its bin directory ahead of `/usr/local/bin`. Pins apply to the
+  next screensaver without a relog, and a pin the installed screensaver doesn't
+  know is skipped instead of keeping it from starting.
+- The daily `sync-upstream` workflow follows the effect list of the `ttfx`
+  that the `omarchy-screensaver` package bundles (its PKGBUILD's version, then
+  the ttfx tag in its `Cargo.toml`), and watches Omarchy's
+  `omarchy-launch-screensaver`. Any change to the launcher, its removal
+  included, opens an issue, as does upstream moving something the sync reads;
+  one half failing no longer stops the other, and nothing crashes the job.
+  `scripts/sync-upstream --accept-launcher` records a reviewed launcher commit.
+- `scripts/check` runs new tests for the wrapper (`scripts/test-launcher`) and
+  the sync (`scripts/test-sync`).
+
+### Removed
+
+- Support for Omarchy 3.x; stay on 1.0.3 there.
+- `extras/omarchy-screensaver`, its `.stock` merge base, and the
+  `hyprland.lua` PATH block 1.x asked for. Upgrading:
+  `sudo rm -f /usr/local/bin/omarchy-screensaver`, drop the PATH block, and
+  install the wrapper as the README shows.
+
 ## [1.0.3] - 2026-10-25
 
 ### Changed
@@ -67,6 +100,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stock launcher script that honors pinned effects via `--include-effects`,
   with allowlist filtering of effect names read from config
 
+[2.0.0]: https://github.com/brianirish/omarchy-screensaver-panel/releases/tag/v2.0.0
 [1.0.3]: https://github.com/brianirish/omarchy-screensaver-panel/releases/tag/v1.0.3
 [1.0.2]: https://github.com/brianirish/omarchy-screensaver-panel/releases/tag/v1.0.2
 [1.0.1]: https://github.com/brianirish/omarchy-screensaver-panel/releases/tag/v1.0.1
