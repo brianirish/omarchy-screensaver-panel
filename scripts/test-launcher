@@ -1,0 +1,109 @@
+#!/bin/bash
+
+# Tests for extras/omarchy-launch-screensaver against a fake stock launcher
+# (prints the arguments it was handed, one per line) and a fake screensaver
+# binary (answers the "which effects do you have" probe the way the real one
+# does). Needs bash and jq.
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+launcher=$PWD/extras/omarchy-launch-screensaver
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/omarchy/bin" "$tmp/home/.config/omarchy"
+
+cat >"$tmp/omarchy/bin/omarchy-launch-screensaver" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$@"
+EOF
+
+cat >"$tmp/screensaver" <<'EOF'
+#!/bin/bash
+if [[ " $* " == *" --effect not-an-effect "* ]]; then
+  echo "omarchy-launch-screensaver: ${FAKE_ANSWER-unknown effect 'not-an-effect' (have: beams, matrix, rain, vhs-tape)}" >&2
+  exit 1
+fi
+exit 0
+EOF
+chmod +x "$tmp/omarchy/bin/omarchy-launch-screensaver" "$tmp/screensaver"
+
+failures=0
+
+# run SHELL_JSON [launcher args...]: the stock launcher's arguments, one per line.
+run() {
+  local config=$1
+  shift
+  if [[ -n $config ]]; then
+    printf '%s\n' "$config" >"$tmp/home/.config/omarchy/shell.json"
+  else
+    rm -f "$tmp/home/.config/omarchy/shell.json"
+  fi
+  # Through the bash on PATH: macOS's /bin/bash is 3.2, which has no mapfile.
+  HOME="$tmp/home" OMARCHY_PATH="$tmp/omarchy" OMARCHY_SCREENSAVER_BINARY="${BINARY-$tmp/screensaver}" \
+    bash "$launcher" "$@" 2>"$tmp/stderr"
+}
+
+expect() {
+  local name=$1 want=$2 got=$3
+  if [[ $got == "$want" ]]; then
+    echo "ok   $name"
+  else
+    echo "FAIL $name"
+    echo "  want: ${want//$'\n'/ | }"
+    echo "  got:  ${got//$'\n'/ | }"
+    failures=$((failures + 1))
+  fi
+}
+
+in_bar() { printf '{"bar":{"layout":{"right":[{"id":"omarchy.clock"},{"id":"brianirish.screensaver","effects":%s}]}}}' "$1"; }
+
+expect "no shell.json: stock launcher, arguments untouched" \
+  "force" "$(run "" force)"
+
+expect "nothing pinned: no --include-effects" \
+  "" "$(run "$(in_bar '[]')")"
+
+expect "pins on the bar entry become one comma-separated list" \
+  $'--include-effects\nmatrix,rain' "$(run "$(in_bar '["matrix","rain"]')")"
+
+expect "pins on a plugins[] entry count too" \
+  $'--include-effects\nbeams' "$(run '{"plugins":[{"id":"brianirish.screensaver","effects":["beams"]}]}')"
+
+expect "force stays first, the caller's options come last" \
+  $'force\n--include-effects\nmatrix\n--seed\n7' "$(run "$(in_bar '["matrix"]')" force --seed 7)"
+
+expect "a single string is one pin" \
+  $'--include-effects\nvhs-tape' "$(run "$(in_bar '"vhs-tape"')")"
+
+expect "names that could become flags, or aren't plain, are dropped" \
+  $'--include-effects\nrain' "$(run "$(in_bar '["-x","--force","Matrix","rain;rm",3,"rain"]')")"
+
+expect "a pin the screensaver doesn't have is skipped" \
+  $'--include-effects\nmatrix' "$(run "$(in_bar '["matrix","gone"]')")"
+expect "and the skip is reported" \
+  "1" "$(grep -c "skipping pinned effect 'gone'" "$tmp/stderr")"
+
+expect "only unknown pins: all effects" \
+  "" "$(run "$(in_bar '["gone","also-gone"]')")"
+
+expect "an unreadable answer passes the pins through" \
+  $'--include-effects\nmatrix,gone' "$(FAKE_ANSWER="something else" run "$(in_bar '["matrix","gone"]')")"
+
+expect "broken shell.json: stock behaviour" \
+  "force" "$(run "{not json" force)"
+
+expect "no native screensaver (Omarchy before 4.5): arguments untouched" \
+  "force" "$(BINARY="$tmp/missing" run "$(in_bar '["matrix"]')" force)"
+
+ln -sf "$launcher" "$tmp/omarchy/bin/omarchy-launch-screensaver"
+status=0
+run "" >/dev/null || status=$?
+expect "refuses to call itself when the stock path points back here" \
+  "1" "$status"
+
+if ((failures)); then
+  echo "$failures failure(s)" >&2
+  exit 1
+fi
+echo "All launcher tests passed."

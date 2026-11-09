@@ -12,7 +12,7 @@ that were previously config-file-and-CLI only, as a native shell panel.
 
 ![The panel](preview.png)
 
-Omarchy's screensaver (terminal text effects over your ASCII branding) is
+Omarchy's screensaver (`ttfx` text effects over your ASCII branding) is
 lovely, but tuning it means editing `shell.json` by hand and there's no way to
 choose *which* effects play. This plugin adds a bar icon that opens a panel
 with:
@@ -45,43 +45,51 @@ The widget lands in the bar's right section (move it with
 
 Everything except effect pinning works out of the box.
 
+Requires Omarchy 4.5 or later, where the screensaver is the native
+`omarchy-screensaver` overlay. On Omarchy 3.x, use
+[v1.0.3](https://github.com/brianirish/omarchy-screensaver-panel/releases/tag/v1.0.3).
+
 ## Enabling effect pinning
 
-Stock `omarchy-screensaver` always runs `ttfx --random-effect` over all
-effects. To honor the effects you pin in the panel, install the bundled
-override (a copy of the stock script that adds `--include-effects`):
+Stock Omarchy plays a random pick from every effect. To honor the effects you
+pin in the panel, install the bundled launcher wrapper, which passes them to
+the screensaver as `--include-effects`:
 
 ```bash
-sudo install -m 755 extras/omarchy-screensaver /usr/local/bin/omarchy-screensaver
+sudo install -m 755 ~/.config/omarchy/plugins/brianirish.screensaver/extras/omarchy-launch-screensaver \
+  /usr/local/bin/omarchy-launch-screensaver
 ```
 
-One catch: Omarchy's `envs.lua` prepends `$OMARCHY_PATH/bin` to the session
-PATH, ahead of `/usr/local/bin`, so the stock script would still win. Add this
-at the end of `~/.config/hypr/hyprland.lua` (user config loads after Omarchy's
-defaults) to put `/usr/local/bin` first:
+`/usr/local/bin` comes before `/usr/bin` on PATH, so every launch (idle,
+_System > Screensaver_, the panel's Preview) goes through the wrapper, which
+then hands off to Omarchy's own launcher. Pinned effects are read from the
+widget's `shell.json` entry at each launch, so changes apply to the next
+screensaver without a relog. With nothing pinned, the wrapper changes nothing.
+A pinned effect the installed screensaver doesn't know is skipped rather than
+stopping the screensaver from starting.
 
-```lua
--- /usr/local/bin overrides ahead of Omarchy's bin dir.
-local omarchy_bin = (os.getenv("OMARCHY_PATH") or "/usr/share/omarchy") .. "/bin"
-local path_entries = {}
-for entry in (os.getenv("PATH") or "/usr/local/bin:/usr/bin"):gmatch("[^:]+") do
-  if entry ~= omarchy_bin and entry ~= "/usr/local/bin" then
-    table.insert(path_entries, entry)
-  end
-end
-table.insert(path_entries, 1, omarchy_bin)
-table.insert(path_entries, 1, "/usr/local/bin")
-hl.env("PATH", table.concat(path_entries, ":"))
+> In `omarchy-dev-link` mode, Omarchy puts your checkout's `bin/` at the front
+> of PATH, ahead of `/usr/local/bin`, and the wrapper is bypassed.
+
+### Upgrading from 1.x
+
+The 1.x override replaced the terminal screensaver script that Omarchy 4.5
+removed, so it no longer runs. Remove it, and the PATH block 1.x asked you to
+add to `~/.config/hypr/hyprland.lua` (Omarchy 4.5 no longer puts its own bin
+directory ahead of `/usr/local/bin`), then install the wrapper as above:
+
+```bash
+sudo rm -f /usr/local/bin/omarchy-screensaver
 ```
 
-Then reload/relog. Pinned effects are stored inline on the widget's
-`shell.json` entry; with none pinned the override behaves exactly like stock.
+### Keeping up with Omarchy
 
-> The override is a fork of the stock script. A daily workflow re-syncs it
-> with upstream Omarchy, and the effect picker with the `ttfx` Omarchy ships,
-> and cuts a release when either changes. After `omarchy plugin update`,
-> re-run the install line above so `/usr/local/bin` has the current copy.
->
+A daily workflow re-syncs the effect picker with the `ttfx` that Omarchy's
+screensaver bundles and cuts a release when the list changes; pick that up
+with `omarchy plugin update brianirish.screensaver`. It also watches Omarchy's
+`omarchy-launch-screensaver`, and opens an issue for a human when that changes.
+The wrapper only needs reinstalling when a release says so.
+
 > The marketplace verifies one exact commit per listing, while `omarchy plugin
 > add` and `omarchy plugin update` install the current `main`. After a release
 > the listing may show *Update unverified* until the new commit is re-verified;
@@ -92,10 +100,8 @@ Then reload/relog. Pinned effects are stored inline on the widget's
 
 ```bash
 omarchy plugin remove brianirish.screensaver
-sudo rm -f /usr/local/bin/omarchy-screensaver   # if you installed the override
+sudo rm -f /usr/local/bin/omarchy-launch-screensaver   # if you installed the wrapper
 ```
-
-(And drop the PATH block from `hyprland.lua` if you added it.)
 
 ## License
 

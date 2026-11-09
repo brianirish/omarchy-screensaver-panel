@@ -1,9 +1,10 @@
 name: Sync upstream
 
-# Daily: re-sync extras/omarchy-screensaver with Omarchy's stock script and
-# Panel.qml's effect list with the ttfx version Omarchy ships. Whatever moved
-# is committed to main and released. A merge conflict in the override is not
-# something a bot should settle, so that case opens an issue instead.
+# Daily: re-sync Panel.qml's effect list with the ttfx that Omarchy's native
+# screensaver bundles, and watch the stock omarchy-launch-screensaver that
+# extras/omarchy-launch-screensaver wraps. An effect change is committed to
+# main and released. A launcher change, or upstream moving something the sync
+# reads, is not something a bot should settle, so those open an issue instead.
 #
 # Pushes made with the workflow token do not trigger ci.yml, which is why
 # scripts/check runs here before anything is committed.
@@ -59,18 +60,19 @@ jobs:
           git push origin "$TAG"
           gh release create "$TAG" --title "$TAG" --notes-file "$NOTES_FILE"
 
-      - name: Open an issue for a merge conflict
-        if: steps.sync.outputs.conflict == 'true'
+      - name: Open an issue for what needs a human
+        if: steps.sync.outputs.attention == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          REPORT_FILE: ${{ steps.sync.outputs.conflict_file }}
+          TITLE: ${{ steps.sync.outputs.attention_title }}
+          REPORT_FILE: ${{ steps.sync.outputs.attention_file }}
         run: |
           gh label create upstream-sync --color d93f0b --force \
             --description "An upstream change the sync workflow could not apply"
-          existing=$(gh issue list --label upstream-sync --state open --json number --jq '.[0].number // empty')
+          existing=$(gh issue list --label upstream-sync --state open --json number,title \
+            --jq '.[] | select(.title == env.TITLE) | .number' | head -n1)
           if [[ -n $existing ]]; then
-            echo "Conflict already tracked in #$existing; not filing another."
+            echo "Already tracked in #$existing; not filing another."
           else
-            gh issue create --label upstream-sync --body-file "$REPORT_FILE" \
-              --title "Stock omarchy-screensaver changed and no longer merges onto the override"
+            gh issue create --label upstream-sync --title "$TITLE" --body-file "$REPORT_FILE"
           fi

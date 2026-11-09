@@ -1,0 +1,108 @@
+#!/bin/bash
+
+# Offline tests for scripts/sync-upstream. Each case runs against a fresh copy
+# of the repo with a synthesized ttfx registry, so nothing is fetched and the
+# real tree is never written. Needs bash, python3 and jq.
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+failures=0
+
+lock_commit=$(jq -r '."omarchy-launch-screensaver".commit' upstream.json)
+screensaver_version=$(jq -r '."omarchy-screensaver".version' upstream.json)
+ttfx_version=$(jq -r .ttfx.version upstream.json)
+
+# registry EXTRA DROP: a ttfx src/effects/mod.rs with Panel.qml's effects,
+# minus DROP, plus EXTRA (a lowercase name, documented as "Something new.").
+registry() {
+  python3 - "$1" "$2" <<'EOF'
+import re, sys
+extra, drop = sys.argv[1], sys.argv[2]
+names = re.findall(r'^    \{ value: "([a-z0-9-]+)"', open("Panel.qml").read(), re.M)
+names = [n for n in names if n != drop] + ([extra] if extra else [])
+print("pub enum EffectCommand {")
+for n in names:
+    variant = "".join(part.capitalize() for part in n.split("-"))
+    struct = "NewFx" if n == extra else variant
+    doc = "Something new." if n == extra else f"The {n} effect."
+    print(f"    /// {doc}\n    {variant}({n.replace('-', '_')}::{struct}Config),")
+print("}")
+EOF
+}
+
+# sync CASE REGISTRY_TEXT [sync-upstream args...]: run in a fresh copy at $tmp/CASE.
+sync() {
+  local name=$1 text=$2
+  shift 2
+  mkdir -p "$tmp/$name/scripts" "$tmp/$name/extras"
+  cp Panel.qml README.md manifest.json CHANGELOG.md upstream.json "$tmp/$name/"
+  cp scripts/sync-upstream "$tmp/$name/scripts/"
+  cp extras/omarchy-launch-screensaver "$tmp/$name/extras/"
+  printf '%s\n' "$text" >"$tmp/$name/registry.rs"
+  (cd "$tmp/$name" && python3 scripts/sync-upstream --out-dir out --registry registry.rs \
+    --launcher-commit "$lock_commit" --screensaver-version "$screensaver_version" \
+    --ttfx-version "$ttfx_version" "$@") >"$tmp/$name.out" 2>&1
+}
+
+output() { sed -n "s/^$2=//p" "$tmp/$1.out"; }
+
+expect() {
+  local name=$1 want=$2 got=$3
+  if [[ $got == "$want" ]]; then
+    echo "ok   $name"
+  else
+    echo "FAIL $name"
+    echo "  want: $want"
+    echo "  got:  $got"
+    failures=$((failures + 1))
+  fi
+}
+
+sync same "$(registry "" "")"
+expect "unchanged upstream: nothing to do" "false false false" \
+  "$(output same changed) $(output same release) $(output same attention)"
+
+sync moved "$(registry "newfx" "wipe")"
+expect "an effect added and one dropped: changed, released" "true true" \
+  "$(output moved changed) $(output moved release)"
+expect "the new effect lands with the registry's label and description" \
+  '    { value: "newfx", label: "New Fx", description: "Something new" },' \
+  "$(grep '"newfx"' "$tmp/moved/Panel.qml")"
+expect "the dropped effect is gone" "0" "$(grep -c '"wipe"' "$tmp/moved/Panel.qml" || true)"
+expect "minor version bump in manifest.json" \
+  "$(jq -r .version manifest.json | awk -F. '{print $1"."$2+1".0"}')" "$(jq -r .version "$tmp/moved/manifest.json")"
+expect "the result passes --lint" "0" "$(cd "$tmp/moved" && python3 scripts/sync-upstream --lint >/dev/null 2>&1; echo $?)"
+expect "the release notes name the new effect" "1" "$(grep -c 'newfx' "$tmp/moved/out/notes.md")"
+
+sync bumped "$(registry "" "")" --screensaver-version 9.9.9
+expect "a new package version alone: recorded, not released" "true false" \
+  "$(output bumped changed) $(output bumped release)"
+expect "upstream.json records it" "9.9.9" "$(jq -r '."omarchy-screensaver".version' "$tmp/bumped/upstream.json")"
+expect "the Panel is untouched" "" "$(diff Panel.qml "$tmp/bumped/Panel.qml")"
+
+sync drift "$(registry "" "")" --launcher-commit 0123456789abcdef0123456789abcdef01234567
+expect "an upstream launcher change: attention, nothing written" "true false" \
+  "$(output drift attention) $(output drift changed)"
+expect "with a title for the issue" \
+  "Stock omarchy-launch-screensaver changed: check the effect-pinning wrapper" "$(output drift attention_title)"
+expect "and the reviewed commit stays in upstream.json" "$lock_commit" \
+  "$(jq -r '."omarchy-launch-screensaver".commit' "$tmp/drift/upstream.json")"
+
+sync unreadable "no enum here"
+expect "an unreadable registry is reported, not raised" "true false 0" \
+  "$(output unreadable attention) $(output unreadable changed) $(grep -c Traceback "$tmp/unreadable.out" || true)"
+expect "with a title for the issue" \
+  "Upstream sync can't read the ttfx effect list" "$(output unreadable attention_title)"
+
+sync both "no enum here" --launcher-commit 0123456789abcdef0123456789abcdef01234567
+expect "two problems at once: one issue covering both" "Upstream sync needs attention 2" \
+  "$(output both attention_title) $(grep -c '^## ' "$tmp/both/out/attention.md")"
+
+if ((failures)); then
+  echo "$failures failure(s)" >&2
+  exit 1
+fi
+echo "All sync tests passed."

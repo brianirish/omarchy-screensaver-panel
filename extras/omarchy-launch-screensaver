@@ -1,0 +1,64 @@
+#!/bin/bash
+
+# Effect pinning for the Omarchy screensaver, from the brianirish.screensaver
+# panel. Installed as /usr/local/bin/omarchy-launch-screensaver, which comes
+# before Omarchy's own /usr/bin/omarchy-launch-screensaver on PATH, so every
+# launch passes through here: idle, System > Screensaver, the panel's Preview.
+#
+# It reads the effects pinned on the widget's shell.json entry and hands them
+# to the stock launcher as --include-effects. With nothing pinned it is the
+# stock launcher. Effects named on the command line win over pinned ones.
+
+stock="${OMARCHY_PATH:-/usr/share/omarchy}/bin/omarchy-launch-screensaver"
+# Overridable so scripts/test-launcher can stand in a fake.
+screensaver="${OMARCHY_SCREENSAVER_BINARY:-/usr/lib/omarchy-screensaver/omarchy-screensaver}"
+
+if [[ $(readlink -f "$stock") == "$(readlink -f "${BASH_SOURCE[0]}")" ]]; then
+  echo "omarchy-launch-screensaver: $stock is this override; not calling itself" >&2
+  exit 1
+fi
+
+# Before Omarchy 4.5 the screensaver ran in a terminal and the launcher took no
+# options, so there is nothing to pass on.
+if [[ ! -x $screensaver ]]; then
+  exec "$stock" "$@"
+fi
+
+# Only plain effect names pass (lowercase letters, digits and dashes, never a
+# leading dash), so nothing read from the config can become a flag.
+mapfile -t pinned < <(jq -r \
+  '[.bar.layout[]?[]?, .plugins[]?] | map(select(.id == "brianirish.screensaver"))
+   | (.[0].effects // []) | if type == "array" then . else [.] end
+   | map(select(type == "string" and test("^[a-z][a-z0-9-]*$"))) | .[]' \
+  "$HOME/.config/omarchy/shell.json" 2>/dev/null)
+
+# The screensaver will not start at all over an effect it does not know, so a
+# pin its ttfx has since dropped would leave no screensaver. Asked for an effect
+# that does not exist, it names the ones it has; drop pins outside that list.
+# If the answer can't be read, the pins go through unfiltered.
+if ((${#pinned[@]})); then
+  known=$("$screensaver" --headless --frames 0 --effect not-an-effect 2>&1 >/dev/null |
+    sed -n 's/.*(have: \([a-z0-9, -]*\))$/\1/p')
+  if [[ -n $known ]]; then
+    kept=()
+    for effect in "${pinned[@]}"; do
+      if [[ ", $known, " == *", $effect, "* ]]; then
+        kept+=("$effect")
+      else
+        echo "omarchy-launch-screensaver: skipping pinned effect '$effect', which this screensaver does not have" >&2
+      fi
+    done
+    pinned=("${kept[@]}")
+  fi
+fi
+
+args=()
+if [[ ${1:-} == "force" ]]; then
+  args+=(force)
+  shift
+fi
+if ((${#pinned[@]})); then
+  args+=(--include-effects "$(IFS=,; echo "${pinned[*]}")")
+fi
+
+exec "$stock" "${args[@]}" "$@"

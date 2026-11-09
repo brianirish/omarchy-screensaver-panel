@@ -5,7 +5,7 @@ import qs.Ui
 
 // Screensaver settings panel: availability toggle, idle timings, a picker
 // limiting which ttfx effects the random rotation uses, and branding actions.
-// Pinned effects are honored by the omarchy-screensaver override in
+// Pinned effects are honored by the omarchy-launch-screensaver wrapper in
 // /usr/local/bin, which reads them back out of this widget's shell.json entry.
 Panel {
   id: root

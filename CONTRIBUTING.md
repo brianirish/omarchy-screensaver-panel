@@ -29,14 +29,13 @@ checkout — fork, add your remote, and work there.)
   `Style`/`Color` tokens instead of hardcoded values so themes keep working.
 - Run `scripts/check` before opening a PR — it is exactly what CI runs
   (shell lint, Omarchy's plugin validator and QML `textFormat` scanner, the
-  effect-list check, YAML).
-- If you change `extras/omarchy-screensaver`, keep its diff against
-  `extras/omarchy-screensaver.stock` as small as possible. A daily workflow
-  three-way merges upstream changes onto the override using that file as the
-  base; the bigger the fork, the likelier a conflict lands on a human.
-- Don't hand-edit the effect list in `Panel.qml`; the same workflow rebuilds
-  it from the `ttfx` version Omarchy ships. Fixing a label or description is
-  fine, adding or removing entries is not.
+  launcher wrapper and upstream sync tests, the effect-list check, YAML).
+- `extras/omarchy-launch-screensaver` wraps Omarchy's own launcher rather than
+  copying it: keep it a thin hand-off that only adds `--include-effects`, and
+  cover behaviour changes in `scripts/test-launcher`.
+- Don't hand-edit the effect list in `Panel.qml`; a daily workflow rebuilds it
+  from the `ttfx` that Omarchy's screensaver bundles. Fixing a label or
+  description is fine, adding or removing entries is not.
 
 ## Pull requests
 

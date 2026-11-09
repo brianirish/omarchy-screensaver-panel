@@ -1,48 +1,50 @@
 #!/usr/bin/env python3
-"""Keep the plugin in step with the two upstreams it tracks.
+"""Keep the plugin in step with the upstreams it depends on.
 
-extras/omarchy-screensaver is a patched copy of Omarchy's stock
-bin/omarchy-screensaver. When the stock script changes upstream, the change is
-three-way merged onto the override, with extras/omarchy-screensaver.stock (the
-stock script as of the last sync) as the merge base.
+Panel.qml lists every ttfx effect. Omarchy's screensaver is the native
+omarchy-screensaver binary, packaged in omacom-io/omarchy-pkgs, and it renders
+the ttfx it pins in its Cargo.toml in process. So the list is compared against
+src/effects/mod.rs of that ttfx tag: effects ttfx gained are added with the
+label and description the registry gives them, effects it dropped are removed,
+and entries that already exist keep their hand-written label and description.
+When the list moves, the version in manifest.json gets a minor bump,
+CHANGELOG.md and README.md are updated, and release notes plus a commit message
+are written for the workflow to use. A new package or ttfx version that changes
+no effect only updates upstream.json (changed=true, release=false).
 
-Panel.qml lists every ttfx effect. Omarchy pins ttfx through the PKGBUILD in
-omacom-io/omarchy-pkgs, so the list is compared against src/effects/mod.rs at
-that version's tag: effects ttfx gained are added with the label and
-description the registry gives them, effects it dropped are removed, and
-entries that already exist keep their hand-written label and description.
+extras/omarchy-launch-screensaver wraps Omarchy's bin/omarchy-launch-screensaver.
+Whether the wrapper still fits a changed launcher is not something a bot should
+decide, so any upstream commit touching that file, its removal included, is
+reported for a human (attention=true) and nothing is written. Once the wrapper
+is checked, --accept-launcher records the new commit.
 
-When something moved, the version in manifest.json is bumped (minor for an
-effect change, patch for a script re-sync), CHANGELOG.md and README.md are
-updated, and release notes plus a commit message are written for the workflow
-to use. A merge conflict in the override is never settled here: the override
-is left untouched, a report is written, and conflict=true is emitted so a
-human gets an issue. A ttfx version bump that changes no effect only updates
-upstream.json (changed=true, release=false).
+Something upstream that can't be read any more (a file moved, a version that no
+longer parses) is reported the same way, and the other half still runs.
 
 Usage:
-  scripts/sync-upstream [--dry-run] [--out-dir DIR] [--write-conflicts]
-                        [--stock FILE] [--registry FILE] [--ttfx-version X.Y.Z]
+  scripts/sync-upstream [--dry-run] [--out-dir DIR]
+                        [--registry FILE --ttfx-version X.Y.Z]
+                        [--screensaver-version X.Y.Z] [--launcher-commit SHA]
+  scripts/sync-upstream --accept-launcher
   scripts/sync-upstream --lint
 
 --lint is offline: Panel.qml's effect list must be sorted, unique, in the exact
-form this script writes, with names the override's allowlist accepts, and
-README.md's effect count must match. --stock, --registry and --ttfx-version
-stand in for the network fetches, for testing. --write-conflicts writes a
-conflicting merge, markers and all, so it can be settled by hand.
+form this script writes, with names the wrapper's allowlist accepts, and
+README.md's effect count must match. --registry, --ttfx-version,
+--screensaver-version and --launcher-commit stand in for the network, for tests.
 
 Outputs, appended to $GITHUB_OUTPUT when set and always printed:
-  changed, release, conflict, version, tag, message_file, notes_file,
-  conflict_file
+  changed, release, attention, version, tag, message_file, notes_file,
+  attention_file, attention_title
 """
 
 import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 import tempfile
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,22 +52,26 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PLUGIN_REPO = "brianirish/omarchy-screensaver-panel"
 PKGS_REPO = "omacom-io/omarchy-pkgs"
-PKGBUILD_PATH = "pkgbuilds/ttfx/PKGBUILD"
+PKGBUILD_PATH = "pkgbuilds/omarchy-screensaver/PKGBUILD"
 REGISTRY_PATH = "src/effects/mod.rs"
 
-OVERRIDE = ROOT / "extras/omarchy-screensaver"
-STOCK = ROOT / "extras/omarchy-screensaver.stock"
+WRAPPER = ROOT / "extras/omarchy-launch-screensaver"
 PANEL = ROOT / "Panel.qml"
 MANIFEST = ROOT / "manifest.json"
 CHANGELOG = ROOT / "CHANGELOG.md"
 README = ROOT / "README.md"
 LOCK = ROOT / "upstream.json"
 
-INSTALL_LINE = "sudo install -m 755 extras/omarchy-screensaver /usr/local/bin/omarchy-screensaver"
-
-# Must stay in step with the jq allowlist in extras/omarchy-screensaver.
-EFFECT_NAME = re.compile(r"^[a-z][a-z0-9-]*$")
+# Must stay in step with the jq allowlist in extras/omarchy-launch-screensaver;
+# --lint checks that it does.
+EFFECT_NAME_PATTERN = "^[a-z][a-z0-9-]*$"
+EFFECT_NAME = re.compile(EFFECT_NAME_PATTERN)
 README_COUNT = re.compile(r"\b(\d+) `ttfx` effects")
+GITHUB_REPO = re.compile(r"https://github\.com/([\w.-]+/[\w.-]+?)(?:\.git)?/?$")
+
+
+class Problem(Exception):
+    """Upstream is not shaped the way this script expects. Reported, not raised."""
 
 
 # ---------------------------------------------------------------- fetching
@@ -78,8 +84,14 @@ def fetch(url, accept=None):
     if token and url.startswith("https://api.github.com/"):
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return response.read().decode()
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.read().decode()
+    except urllib.error.HTTPError as error:
+        # A 404 is upstream moving something; anything else is worth a retry tomorrow.
+        if error.code == 404:
+            raise Problem(f"{url} is gone (404)") from error
+        raise
 
 
 def api(path):
@@ -97,94 +109,104 @@ def default_branch(repo):
 def latest_commit(repo, branch, path):
     commits = api(f"repos/{repo}/commits?sha={branch}&path={path}&per_page=1")
     if not commits:
-        raise SystemExit(f"{repo} has no commit touching {path} on {branch}")
+        raise Problem(f"{repo} has no commit touching {path} on {branch}")
     return commits[0]["sha"]
 
 
-# ------------------------------------------------------------ stock script
-
-def fetch_stock(args, lock):
-    entry = lock["omarchy-screensaver"]
-    if args.stock:
-        return Path(args.stock).read_text(), "local"
-    sha = latest_commit(entry["repo"], default_branch(entry["repo"]), entry["path"])
-    return raw(entry["repo"], sha, entry["path"]), sha
+def github_repo(url, what):
+    match = GITHUB_REPO.match(url.strip())
+    if not match:
+        raise Problem(f"{what} is not a GitHub repository URL: {url!r}")
+    return match.group(1)
 
 
-def merge_stock(new_stock, sha):
-    """Three-way merge the upstream change onto the override.
+# --------------------------------------------------------------- launcher
 
-    Returns (merged text, conflict hunk count); 0 hunks means it applied clean.
+def check_launcher(args, lock):
+    """The newest upstream commit touching the launcher, and whether it still exists.
+
+    Returns (sha, exists). With --launcher-commit, that commit stands in for
+    upstream's and the file is taken to exist.
     """
-    with tempfile.TemporaryDirectory() as tmp:
-        ours, base, theirs = (Path(tmp, name) for name in ("ours", "base", "theirs"))
-        ours.write_text(OVERRIDE.read_text())
-        base.write_text(STOCK.read_text())
-        theirs.write_text(new_stock)
-        run = subprocess.run(
-            ["git", "merge-file", "-p",
-             "-L", "extras/omarchy-screensaver",
-             "-L", "stock at last sync",
-             "-L", f"stock at {sha[:7]}",
-             str(ours), str(base), str(theirs)],
-            capture_output=True, text=True)
-    # merge-file exits with the conflict count, or "negative" (255) on error.
-    if run.returncode > 127 or run.returncode < 0:
-        raise SystemExit(f"git merge-file failed: {run.stderr.strip()}")
-    return run.stdout, run.returncode
+    entry = lock["omarchy-launch-screensaver"]
+    if args.launcher_commit:
+        return args.launcher_commit, True
+    branch = default_branch(entry["repo"])
+    sha = latest_commit(entry["repo"], branch, entry["path"])
+    try:
+        raw(entry["repo"], sha, entry["path"])
+    except Problem:
+        return sha, False
+    return sha, True
 
 
-def commit_url(lock, sha):
-    if sha == "local":
-        return "a local file"
-    return f"https://github.com/{lock['omarchy-screensaver']['repo']}/commit/{sha}"
+def launcher_report(lock, sha, exists):
+    entry = lock["omarchy-launch-screensaver"]
+    repo, path = entry["repo"], entry["path"]
+    history = f"https://github.com/{repo}/commits/HEAD/{path}"
+    reviewed = f"https://github.com/{repo}/blob/{entry['commit']}/{path}"
+    if not exists:
+        title = "Stock omarchy-launch-screensaver was removed upstream"
+        what = (f"`{path}` was removed from {repo} in "
+                f"https://github.com/{repo}/commit/{sha}, so `extras/omarchy-launch-screensaver` "
+                "has nothing to hand off to.")
+        now = ""
+        todo = ("Rework the wrapper for whatever replaced it, point `omarchy-launch-screensaver` "
+                "in `upstream.json` at that file and commit, then run `scripts/check`.")
+    else:
+        title = "Stock omarchy-launch-screensaver changed: check the effect-pinning wrapper"
+        what = (f"`{path}` in {repo} changed (https://github.com/{repo}/commit/{sha}). "
+                "`extras/omarchy-launch-screensaver` wraps it, passing pinned effects as "
+                "`--include-effects` and keeping a leading `force` first; check that still holds.")
+        now = f"- Now: https://github.com/{repo}/blob/{sha}/{path}\n"
+        todo = ("Once the wrapper fits (changed or not), record the new commit and commit "
+                "`upstream.json` with any wrapper change:\n\n"
+                "```bash\nscripts/sync-upstream --accept-launcher\nscripts/check\n```")
+    body = f"""{what}
 
+- Last reviewed: {reviewed}
+{now}- History: {history}
 
-def conflict_report(lock, sha, hunks, merged):
-    entry = lock["omarchy-screensaver"]
-    return f"""The stock `{entry['path']}` in {entry['repo']} changed ({commit_url(lock, sha)}) and the change does not merge cleanly onto `extras/omarchy-screensaver` ({hunks} conflict hunk{'s' if hunks != 1 else ''}).
+{todo}
 
-- Stock at the last sync: `extras/omarchy-screensaver.stock` ({commit_url(lock, entry['commit'])})
-- Stock now: https://github.com/{entry['repo']}/blob/{sha}/{entry['path']}
-
-<details>
-<summary>Merge result</summary>
-
-```bash
-{merged.rstrip()}
-```
-
-</details>
-
-To settle it locally:
-
-```bash
-scripts/sync-upstream --write-conflicts   # writes the merge, markers and all, and bumps the version
-$EDITOR extras/omarchy-screensaver        # resolve the markers
-scripts/check
-```
-
-Then commit, tag `v<version from manifest.json>` and publish the release. The daily sync-upstream workflow filed this and will not file another while it stays open.
+The daily sync-upstream workflow filed this and will not file it again while it stays open.
 """
+    return title, body
 
 
 # ---------------------------------------------------------------- effects
 
+def fetch_pins(args, lock):
+    """The packaged omarchy-screensaver version, and the ttfx repo and version it pins."""
+    if args.screensaver_version:
+        return (lock["omarchy-screensaver"]["repo"], args.screensaver_version,
+                lock["ttfx"]["repo"], args.ttfx_version or lock["ttfx"]["version"])
+    pkgbuild = raw(PKGS_REPO, default_branch(PKGS_REPO), PKGBUILD_PATH)
+    version = re.search(r"^pkgver=([0-9][0-9A-Za-z.]*)\s*$", pkgbuild, re.M)
+    url = re.search(r"""^url=["']?([^"'\s]+)["']?\s*$""", pkgbuild, re.M)
+    if not version or not url:
+        raise Problem(f"{PKGS_REPO}/{PKGBUILD_PATH} has no pkgver or url line")
+    screensaver_repo = github_repo(url.group(1), f"{PKGBUILD_PATH} url")
+    cargo = raw(screensaver_repo, f"v{version.group(1)}", "Cargo.toml")
+    pin = re.search(r"^ttfx\s*=\s*\{([^}\n]*)\}", cargo, re.M)
+    git = pin and re.search(r'git\s*=\s*"([^"]+)"', pin.group(1))
+    tag = pin and re.search(r'tag\s*=\s*"v?([0-9][0-9A-Za-z.]*)"', pin.group(1))
+    if not git or not tag:
+        raise Problem(f"{screensaver_repo} v{version.group(1)} Cargo.toml no longer pins ttfx "
+                      'as { git = "...", tag = "vX.Y.Z" }')
+    return (screensaver_repo, version.group(1),
+            github_repo(git.group(1), "the ttfx git URL"), tag.group(1))
+
+
+def fetch_registry(args, ttfx_repo, ttfx_version):
+    if args.registry:
+        return Path(args.registry).read_text()
+    return raw(ttfx_repo, f"v{ttfx_version}", REGISTRY_PATH)
+
+
 VARIANT = re.compile(
     r"((?:^[ \t]*///[^\n]*\n)+)^[ \t]*([A-Z][A-Za-z0-9]*)\(\w+::([A-Za-z0-9]+)Config\)",
     re.M)
-
-
-def fetch_registry(args, lock):
-    entry = lock["ttfx"]
-    if args.registry:
-        return Path(args.registry).read_text(), args.ttfx_version or entry["version"]
-    pkgbuild = raw(PKGS_REPO, default_branch(PKGS_REPO), PKGBUILD_PATH)
-    match = re.search(r"^pkgver=([0-9][0-9A-Za-z.]*)\s*$", pkgbuild, re.M)
-    if not match:
-        raise SystemExit(f"no pkgver in {PKGS_REPO}/{PKGBUILD_PATH}")
-    version = match.group(1)
-    return raw(entry["repo"], f"v{version}", REGISTRY_PATH), version
 
 
 def parse_registry(text):
@@ -196,20 +218,20 @@ def parse_registry(text):
     """
     start = text.find("pub enum EffectCommand")
     if start < 0:
-        raise SystemExit("ttfx registry has no EffectCommand enum")
+        raise Problem("ttfx registry has no EffectCommand enum")
     body = text[start:]
     body = body[:body.find("\n}")]
     effects = {}
     for docs, variant, struct in VARIANT.findall(body):
         name = re.sub(r"(?<!^)(?=[A-Z])", "-", variant).lower()
         if not EFFECT_NAME.match(name):
-            raise SystemExit(f"ttfx effect {name!r} would not pass the override's allowlist")
+            raise Problem(f"ttfx effect {name!r} would not pass the wrapper's allowlist")
         label = " ".join(re.findall(r"[A-Z][a-z0-9]*", struct))
         description = " ".join(
             line.strip().lstrip("/").strip() for line in docs.strip().splitlines()).rstrip(".")
         effects[name] = {"value": name, "label": label, "description": description}
     if not effects:
-        raise SystemExit("no effects parsed from the ttfx registry")
+        raise Problem("no effects parsed from the ttfx registry")
     return effects
 
 
@@ -260,11 +282,9 @@ def render_panel(effects):
 
 # ------------------------------------------------------------- versioning
 
-def bump(version, part):
-    major, minor, patch = (int(x) for x in version.split("."))
-    if part == "minor":
-        return f"{major}.{minor + 1}.0"
-    return f"{major}.{minor}.{patch + 1}"
+def bump_minor(version):
+    major, minor, _ = (int(x) for x in version.split("."))
+    return f"{major}.{minor + 1}.0"
 
 
 def set_manifest_version(text, version):
@@ -290,12 +310,13 @@ def add_changelog_entry(text, version, today, sections):
     return text[:match.start()] + link + text[match.start():]
 
 
-def release_notes(sections, extra):
+def release_notes(sections):
     parts = []
     for heading, bullets in sections:
         if bullets:
             parts.append(f"## {heading}\n\n" + "\n".join(f"- {b}" for b in bullets))
-    parts += extra
+    parts.append("Pick it up with `omarchy plugin update brianirish.screensaver`. "
+                 "The effect-pinning wrapper is unchanged.")
     parts.append("Cut by the daily upstream sync workflow. Full history in CHANGELOG.md.")
     return "\n\n".join(parts) + "\n"
 
@@ -316,18 +337,25 @@ def lint():
                          "in the form scripts/sync-upstream writes")
     for name in effects:
         if not EFFECT_NAME.match(name):
-            raise SystemExit(f"Panel.qml effect {name!r} would not pass the override's allowlist")
+            raise SystemExit(f"Panel.qml effect {name!r} would not pass the wrapper's allowlist")
+    if f'test("{EFFECT_NAME_PATTERN}")' not in WRAPPER.read_text():
+        raise SystemExit(f"{WRAPPER.relative_to(ROOT)} no longer filters effect names with "
+                         f"{EFFECT_NAME_PATTERN}; keep it and EFFECT_NAME_PATTERN in step")
     match = README_COUNT.search(README.read_text())
     if not match:
         raise SystemExit("README.md no longer says how many `ttfx` effects there are")
     if int(match.group(1)) != len(effects):
         raise SystemExit(f"README.md says {match.group(1)} ttfx effects; Panel.qml lists {len(effects)}")
     lock = json.loads(LOCK.read_text())
-    stock_sha = lock["omarchy-screensaver"]["commit"]
-    ttfx_version = lock["ttfx"]["version"]
-    if not STOCK.exists():
-        raise SystemExit(f"{STOCK.relative_to(ROOT)} is missing")
-    print(f"{len(effects)} effects, ttfx {ttfx_version}, stock script at {stock_sha[:7]}")
+    try:
+        launcher = lock["omarchy-launch-screensaver"]
+        screensaver = lock["omarchy-screensaver"]
+        ttfx = lock["ttfx"]
+        summary = (f"{len(effects)} effects, ttfx {ttfx['version']} via omarchy-screensaver "
+                   f"{screensaver['version']}, launcher at {launcher['commit'][:7]}")
+    except (KeyError, TypeError) as error:
+        raise SystemExit(f"upstream.json is missing {error}")
+    print(summary)
 
 
 # ------------------------------------------------------------------- main
@@ -344,14 +372,29 @@ def emit(outputs):
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--lint", action="store_true", help="offline consistency checks only")
+    parser.add_argument("--accept-launcher", action="store_true",
+                        help="record upstream's current launcher commit as reviewed")
     parser.add_argument("--dry-run", action="store_true", help="report, but write nothing to the repo")
-    parser.add_argument("--out-dir", help="where the notes, commit message and conflict report go")
-    parser.add_argument("--write-conflicts", action="store_true",
-                        help="write a conflicting merge with its markers instead of reporting it")
-    parser.add_argument("--stock", help="use this file as the upstream stock script")
+    parser.add_argument("--out-dir", help="where the notes, commit message and report go")
     parser.add_argument("--registry", help="use this file as ttfx's src/effects/mod.rs")
     parser.add_argument("--ttfx-version", help="ttfx version to record with --registry")
-    return parser.parse_args()
+    parser.add_argument("--screensaver-version",
+                        help="omarchy-screensaver version to record instead of reading the PKGBUILD")
+    parser.add_argument("--launcher-commit", help="treat this as upstream's latest launcher commit")
+    args = parser.parse_args()
+    if args.registry and not args.screensaver_version:
+        parser.error("--registry needs --screensaver-version, so nothing is fetched")
+    return args
+
+
+def accept_launcher(args):
+    lock = json.loads(LOCK.read_text())
+    sha, exists = check_launcher(args, lock)
+    if not exists:
+        raise SystemExit("upstream removed the launcher; there is nothing to accept")
+    lock["omarchy-launch-screensaver"]["commit"] = sha
+    LOCK.write_text(json.dumps(lock, indent=2) + "\n")
+    print(f"recorded launcher commit {sha[:7]} in upstream.json")
 
 
 def main():
@@ -359,85 +402,84 @@ def main():
     if args.lint:
         lint()
         return
+    if args.accept_launcher:
+        accept_launcher(args)
+        return
 
     lock = json.loads(LOCK.read_text())
     out_dir = Path(args.out_dir) if args.out_dir else Path(tempfile.mkdtemp(prefix="sync-upstream-"))
     out_dir.mkdir(parents=True, exist_ok=True)
-    outputs = {"changed": False, "release": False, "conflict": False}
+    outputs = {"changed": False, "release": False, "attention": False}
     writes = {}
-    added_bullets, changed_bullets, removed_bullets, extra_notes, titles = [], [], [], [], []
+    reports = []
+    added_bullets, removed_bullets = [], []
+    added = removed = []
 
-    # Stock script: three-way merge upstream's change onto the override.
-    new_stock, stock_sha = fetch_stock(args, lock)
-    stock_synced = False
-    if new_stock != STOCK.read_text():
-        merged, hunks = merge_stock(new_stock, stock_sha)
-        if hunks and not args.write_conflicts:
-            report = out_dir / "conflict.md"
-            report.write_text(conflict_report(lock, stock_sha, hunks, merged))
-            outputs.update(conflict=True, conflict_file=str(report))
-            print(f"stock script changed ({stock_sha[:7]}) and conflicts with the override; "
-                  f"report in {report}", file=sys.stderr)
-        else:
-            if hunks:
-                print(f"writing {hunks} conflict hunk(s) into extras/omarchy-screensaver; "
-                      "resolve the markers before committing", file=sys.stderr)
-            stock_synced = True
-            writes[OVERRIDE] = merged
-            writes[STOCK] = new_stock
-            lock["omarchy-screensaver"]["commit"] = stock_sha
-            changed_bullets.append(
-                "`extras/omarchy-screensaver`: re-synced with the stock Omarchy script "
-                f"({commit_url(lock, stock_sha)})")
-            extra_notes.append(
-                "If you use effect pinning, refresh the installed override after "
-                f"`omarchy plugin update`:\n\n```bash\n{INSTALL_LINE}\n```")
-            titles.append("omarchy-screensaver override re-sync")
+    # Launcher: any upstream change is for a human to look at.
+    try:
+        sha, exists = check_launcher(args, lock)
+        if sha != lock["omarchy-launch-screensaver"]["commit"] or not exists:
+            reports.append(launcher_report(lock, sha, exists))
+    except Problem as problem:
+        reports.append(("Upstream sync can't check omarchy-launch-screensaver", f"{problem}\n"))
 
     # Effects: add what ttfx gained, drop what it lost, keep existing entries as written.
-    registry, ttfx_version = fetch_registry(args, lock)
-    upstream = parse_registry(registry)
-    panel_text = PANEL.read_text()
-    current = parse_panel(panel_text)
-    added = sorted(set(upstream) - set(current))
-    removed = sorted(set(current) - set(upstream))
-    if added or removed:
-        effects = {k: v for k, v in current.items() if k in upstream}
-        effects.update((k, upstream[k]) for k in added)
-        start, end = panel_block(panel_text)
-        writes[PANEL] = panel_text[:start] + render_panel(effects) + panel_text[end:]
-        readme, count = README_COUNT.subn(f"{len(effects)} `ttfx` effects", README.read_text(), count=1)
-        if count:
-            writes[README] = readme
-        for name in added:
-            effect = upstream[name]
-            added_bullets.append(
-                f"`{name}` effect ({effect['label']}), new in ttfx {ttfx_version}: "
-                f"{effect['description']}.")
-        for name in removed:
-            removed_bullets.append(f"`{name}` effect, dropped by ttfx {ttfx_version}.")
-        titles.append(f"ttfx {ttfx_version} effect list")
-    lock["ttfx"]["version"] = ttfx_version
+    try:
+        screensaver_repo, screensaver_version, ttfx_repo, ttfx_version = fetch_pins(args, lock)
+        upstream = parse_registry(fetch_registry(args, ttfx_repo, ttfx_version))
+    except Problem as problem:
+        reports.append(("Upstream sync can't read the ttfx effect list", f"{problem}\n"))
+    else:
+        panel_text = PANEL.read_text()
+        current = parse_panel(panel_text)
+        added = sorted(set(upstream) - set(current))
+        removed = sorted(set(current) - set(upstream))
+        source = f"ttfx {ttfx_version} (omarchy-screensaver {screensaver_version})"
+        if added or removed:
+            effects = {k: v for k, v in current.items() if k in upstream}
+            effects.update((k, upstream[k]) for k in added)
+            start, end = panel_block(panel_text)
+            writes[PANEL] = panel_text[:start] + render_panel(effects) + panel_text[end:]
+            readme, count = README_COUNT.subn(f"{len(effects)} `ttfx` effects", README.read_text(), count=1)
+            if count:
+                writes[README] = readme
+            for name in added:
+                effect = upstream[name]
+                added_bullets.append(
+                    f"`{name}` effect ({effect['label']}), new in {source}: {effect['description']}.")
+            for name in removed:
+                removed_bullets.append(f"`{name}` effect, dropped by {source}.")
+        lock["omarchy-screensaver"].update(repo=screensaver_repo, version=screensaver_version)
+        lock["ttfx"].update(repo=ttfx_repo, version=ttfx_version)
 
     lock_text = json.dumps(lock, indent=2) + "\n"
     if lock_text != LOCK.read_text():
         writes[LOCK] = lock_text
 
-    sections = [("Added", added_bullets), ("Changed", changed_bullets), ("Removed", removed_bullets)]
-    part = "minor" if (added or removed) else ("patch" if stock_synced else None)
+    sections = [("Added", added_bullets), ("Removed", removed_bullets)]
     message = None
-    if part:
-        version = bump(json.loads(MANIFEST.read_text())["version"], part)
+    if added or removed:
+        version = bump_minor(json.loads(MANIFEST.read_text())["version"])
         today = datetime.now(timezone.utc).date().isoformat()
         writes[MANIFEST] = set_manifest_version(MANIFEST.read_text(), version)
         writes[CHANGELOG] = add_changelog_entry(CHANGELOG.read_text(), version, today, sections)
         notes = out_dir / "notes.md"
-        notes.write_text(release_notes(sections, extra_notes))
-        title = "Sync upstream: " + "; ".join(titles)
-        message = commit_message(title, version, sections)
+        notes.write_text(release_notes(sections))
+        message = commit_message(f"Sync upstream: ttfx {ttfx_version} effect list", version, sections)
         outputs.update(release=True, version=version, tag=f"v{version}", notes_file=str(notes))
     elif writes:
-        message = f"Record ttfx {ttfx_version} as the version the effect list matches\n"
+        message = (f"Record omarchy-screensaver {lock['omarchy-screensaver']['version']} and "
+                   f"ttfx {lock['ttfx']['version']} as what the effect list matches\n")
+
+    if reports:
+        title = reports[0][0] if len(reports) == 1 else "Upstream sync needs attention"
+        body = "\n\n---\n\n".join(
+            body if len(reports) == 1 else f"## {t}\n\n{body}" for t, body in reports)
+        report = out_dir / "attention.md"
+        report.write_text(body)
+        outputs.update(attention=True, attention_file=str(report), attention_title=title)
+        for t, _ in reports:
+            print(f"needs attention: {t}", file=sys.stderr)
 
     if writes:
         outputs["changed"] = True
@@ -449,7 +491,7 @@ def main():
         if not args.dry_run:
             for path, text in writes.items():
                 path.write_text(text)
-    else:
+    elif not reports:
         print("nothing to sync")
     emit(outputs)
 
