@@ -6,7 +6,7 @@ download; the commit column is the upstream revision the copy was taken from.
 
 | File | Upstream path | Commit |
 |------|---------------|--------|
-| `omarchy-plugin-validate` | `bin/omarchy-plugin-validate` | `f8835df` |
+| `omarchy-plugin-validate` | `bin/omarchy-plugin-validate` | `b7e900c` |
 | `qml-text-format-scan.py` | `test/shell.d/qml-text-format-scan.py` | `4be440b` |
 
 Refresh:
