@@ -7,16 +7,6 @@
 
 **Made in Canada 🇨🇦**
 
-> [!WARNING]
-> **Effect pinning is broken on Omarchy 4.5 and later.** Omarchy 4.5 replaced
-> the terminal screensaver with a native one, and the override described under
-> [Enabling effect pinning](#enabling-effect-pinning) no longer runs, so every
-> effect plays whatever you pin. The rest of the panel (on/off toggle, idle
-> timing, artwork, Preview) isn't affected. A fix is on the way in
-> [#3](https://github.com/brianirish/omarchy-screensaver-panel/pull/3); until
-> it's released, there's no point installing the override on 4.5. The failing
-> Sync upstream badge is the same issue.
-
 A settings GUI for the [Omarchy](https://omarchy.org) screensaver — the knobs
 that were previously config-file-and-CLI only, as a native shell panel.
 
