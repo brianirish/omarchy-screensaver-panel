@@ -1,25 +1,37 @@
 #!/bin/bash
 
-# Effect pinning for the Omarchy screensaver, from the brianirish.screensaver
-# panel. Installed as /usr/local/bin/omarchy-launch-screensaver, which comes
-# before Omarchy's own /usr/bin/omarchy-launch-screensaver on PATH, so every
-# launch passes through here: idle, System > Screensaver, the panel's Preview.
+# Effect pinning for Omarchy's native screensaver, from the
+# brianirish.screensaver panel. Installed as
+# /usr/local/bin/omarchy-launch-screensaver. Omarchy puts $OMARCHY_PATH/bin
+# ahead of /usr/local/bin on the session PATH, so this only runs once the
+# README's hyprland.lua PATH block puts /usr/local/bin first; then every launch
+# comes through here: idle, System > Screensaver, the panel's Preview, the
+# branding commands.
 #
-# It reads the effects pinned on the widget's shell.json entry and hands them
-# to the stock launcher as --include-effects. With nothing pinned it is the
-# stock launcher. Effects named on the command line win over pinned ones.
+# Where the native screensaver is installed, it reads the effects pinned on the
+# widget's shell.json entry and hands them to Omarchy's own launcher as
+# --include-effects. Anywhere else, Omarchy 4.5.0 included, it hands straight
+# off to the stock launcher and changes nothing; there the screensaver runs in
+# a terminal and extras/omarchy-screensaver pins effects instead. With nothing
+# pinned it is the stock launcher. Effects named on the command line win over
+# pinned ones.
 
+# The stock launcher, by absolute path: looking it up on PATH would find this
+# wrapper again. On Omarchy 4.5.0 it is a symlink to /usr/bin.
 stock="${OMARCHY_PATH:-/usr/share/omarchy}/bin/omarchy-launch-screensaver"
+# The native screensaver the stock launcher hands off to, where there is one.
 # Overridable so scripts/test-launcher can stand in a fake.
 screensaver="${OMARCHY_SCREENSAVER_BINARY:-/usr/lib/omarchy-screensaver/omarchy-screensaver}"
 
+# Installed over the stock launcher itself (or linked to it), exec "$stock"
+# would run this file again, for ever.
 if [[ $(readlink -f "$stock") == "$(readlink -f "${BASH_SOURCE[0]}")" ]]; then
   echo "omarchy-launch-screensaver: $stock is this override; not calling itself" >&2
   exit 1
 fi
 
-# Before Omarchy 4.5 the screensaver ran in a terminal and the launcher took no
-# options, so there is nothing to pass on.
+# No native screensaver: this is a release (4.5.0 or earlier) whose launcher
+# opens a terminal and takes no options but force, so there is nothing to add.
 if [[ ! -x $screensaver ]]; then
   exec "$stock" "$@"
 fi
@@ -34,15 +46,16 @@ mapfile -t pinned < <(jq -r \
 
 # The screensaver will not start at all over an effect it does not know, so a
 # pin its ttfx has since dropped would leave no screensaver. Asked for an effect
-# that does not exist, it names the ones it has; drop pins outside that list.
-# If the answer can't be read, the pins go through unfiltered.
+# that does not exist, it names the ones it has; drop pins outside that list,
+# and "help", which ttfx's command line has but which is no effect. If the
+# answer can't be read, the pins go through unfiltered.
 if ((${#pinned[@]})); then
   known=$("$screensaver" --headless --frames 0 --effect not-an-effect 2>&1 >/dev/null |
     sed -n 's/.*(have: \([a-z0-9, -]*\))$/\1/p')
   if [[ -n $known ]]; then
     kept=()
     for effect in "${pinned[@]}"; do
-      if [[ ", $known, " == *", $effect, "* ]]; then
+      if [[ $effect != help && ", $known, " == *", $effect, "* ]]; then
         kept+=("$effect")
       else
         echo "omarchy-launch-screensaver: skipping pinned effect '$effect', which this screensaver does not have" >&2

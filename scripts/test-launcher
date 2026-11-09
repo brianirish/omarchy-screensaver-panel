@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # Tests for extras/omarchy-launch-screensaver against a fake stock launcher
-# (prints the arguments it was handed, one per line) and a fake screensaver
-# binary (answers the "which effects do you have" probe the way the real one
-# does). Needs bash and jq.
+# (prints the arguments it was handed, one per line) and a fake native
+# screensaver binary (answers the "which effects do you have" probe the way
+# omarchy-screensaver 1.3 does). Nothing real is launched. Needs bash and jq.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -24,6 +24,8 @@ if [[ " $* " == *" --effect not-an-effect "* ]]; then
   echo "omarchy-launch-screensaver: ${FAKE_ANSWER-unknown effect 'not-an-effect' (have: beams, matrix, rain, vhs-tape)}" >&2
   exit 1
 fi
+# Anything else would have started the screensaver.
+echo "$*" >>"${0%/*}/started"
 exit 0
 EOF
 chmod +x "$tmp/omarchy/bin/omarchy-launch-screensaver" "$tmp/screensaver"
@@ -87,20 +89,32 @@ expect "and the skip is reported" \
 expect "only unknown pins: all effects" \
   "" "$(run "$(in_bar '["gone","also-gone"]')")"
 
+expect "help is not an effect, even if the screensaver lists it" \
+  $'--include-effects\nmatrix' "$(FAKE_ANSWER="unknown effect 'not-an-effect' (have: help, matrix)" run "$(in_bar '["help","matrix"]')")"
+
 expect "an unreadable answer passes the pins through" \
   $'--include-effects\nmatrix,gone' "$(FAKE_ANSWER="something else" run "$(in_bar '["matrix","gone"]')")"
 
 expect "broken shell.json: stock behaviour" \
   "force" "$(run "{not json" force)"
 
-expect "no native screensaver (Omarchy before 4.5): arguments untouched" \
+expect "no native screensaver (Omarchy 4.5.0): arguments untouched, pins left to the override" \
   "force" "$(BINARY="$tmp/missing" run "$(in_bar '["matrix"]')" force)"
 
-ln -sf "$launcher" "$tmp/omarchy/bin/omarchy-launch-screensaver"
+# Omarchy 4.5.0's layout: $OMARCHY_PATH/bin holds symlinks into /usr/bin.
+mkdir -p "$tmp/usr-bin"
+mv "$tmp/omarchy/bin/omarchy-launch-screensaver" "$tmp/usr-bin/omarchy-launch-screensaver"
+ln -s "$tmp/usr-bin/omarchy-launch-screensaver" "$tmp/omarchy/bin/omarchy-launch-screensaver"
+expect "a stock launcher reached through a symlink is handed off to, not refused" \
+  $'force\n--include-effects\nmatrix' "$(run "$(in_bar '["matrix"]')" force)"
+
+ln -sfn "$launcher" "$tmp/omarchy/bin/omarchy-launch-screensaver"
 status=0
 run "" >/dev/null || status=$?
 expect "refuses to call itself when the stock path points back here" \
   "1" "$status"
+
+expect "the effect probe never started the screensaver" "" "$(cat "$tmp/started" 2>/dev/null)"
 
 if ((failures)); then
   echo "$failures failure(s)" >&2
