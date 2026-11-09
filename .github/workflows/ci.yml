@@ -4,10 +4,54 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly, against the newest Omarchy release, so a shell change that breaks
+  # the panel shows up here before users report it.
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
 
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install qmllint and PyYAML
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qt6-declarative-dev-tools python3-yaml
+          echo "/usr/lib/qt6/bin" >> "$GITHUB_PATH"
       - run: scripts/check
+
+  # Type-checks the QML against a real Omarchy shell, with Arch's Qt and
+  # Quickshell as an Omarchy install has them. Pull requests use the release
+  # the plugin supports; the weekly run uses the newest one.
+  omarchy:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      SUPPORTED_OMARCHY: v4.5.0
+    steps:
+      - name: Install Qt, Quickshell and git
+        run: pacman -Syu --noconfirm --needed git qt6-declarative quickshell
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Pick the Omarchy release
+        run: |
+          ref=$SUPPORTED_OMARCHY
+          if [[ $GITHUB_EVENT_NAME == schedule || $GITHUB_EVENT_NAME == workflow_dispatch ]]; then
+            ref=$(git ls-remote --tags --refs https://github.com/basecamp/omarchy.git 'v*' |
+              sed 's|.*refs/tags/||' | grep -vE -- '-(rc|beta|alpha)' | sort -V | tail -1)
+          fi
+          echo "Omarchy $ref"
+          echo "OMARCHY_REF=$ref" >> "$GITHUB_ENV"
+      - name: Fetch that release's shell
+        run: |
+          git clone --quiet --depth 1 --branch "$OMARCHY_REF" --filter=blob:none --sparse \
+            https://github.com/basecamp/omarchy.git "$RUNNER_TEMP/omarchy"
+          git -C "$RUNNER_TEMP/omarchy" sparse-checkout set shell
+      - run: scripts/qml-api-lint "$RUNNER_TEMP/omarchy/shell"

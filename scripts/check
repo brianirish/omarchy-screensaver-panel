@@ -1,8 +1,9 @@
 #!/bin/bash
 
 # Every check CI runs, in one place, so `scripts/check` locally is exactly
-# what a pull request is held to. Needs bash 5, jq, shellcheck and python3;
-# the YAML check also wants PyYAML and is skipped with a note without it.
+# what a pull request is held to. Needs bash 5, git, jq, shellcheck and
+# python3; qmllint, PyYAML and an Omarchy shell (for the API lint) are used
+# when present and skipped with a note otherwise (CI has them).
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -10,11 +11,12 @@ cd "$(dirname "$0")/.."
 step() { printf '\n== %s\n' "$*"; }
 
 step "Shell syntax"
-bash -n extras/omarchy-launch-screensaver scripts/check scripts/test-launcher scripts/test-sync \
-  scripts/vendor/omarchy-plugin-validate
+bash -n extras/omarchy-launch-screensaver scripts/check scripts/qml-api-lint scripts/test-launcher \
+  scripts/test-sync scripts/vendor/omarchy-plugin-validate
 
 step "ShellCheck"
-shellcheck extras/omarchy-launch-screensaver scripts/check scripts/test-launcher scripts/test-sync
+shellcheck extras/omarchy-launch-screensaver scripts/check scripts/qml-api-lint scripts/test-launcher \
+  scripts/test-sync
 
 step "Effect-pinning wrapper"
 bash scripts/test-launcher
@@ -31,6 +33,24 @@ if [[ $manifest_version != "$changelog_version" ]]; then
   exit 1
 fi
 echo "version $manifest_version"
+
+step "QML lint (properties the shell would refuse to load)"
+# The shell drops a widget whose QML overrides a FINAL property; qmllint only
+# warns about it, so fail on that class of message here.
+qmllint="$(command -v qmllint || true)"
+[[ -n $qmllint ]] || [[ ! -x /usr/lib/qt6/bin/qmllint ]] || qmllint=/usr/lib/qt6/bin/qmllint
+if [[ -n $qmllint ]]; then
+  if lint=$("$qmllint" ./*.qml 2>&1 | grep -E '^Error|final member'); then
+    printf '%s\n' "$lint" >&2
+    exit 1
+  fi
+  echo "clean"
+else
+  echo "skipped: qmllint not installed (CI runs it)"
+fi
+
+step "QML against Omarchy's own components (qs.Ui, qs.Commons, Quickshell)"
+scripts/qml-api-lint
 
 step "QML Text elements declare textFormat (Omarchy's scanner)"
 # The scanner walks ROOT/shell, so stage the plugin's QML under a throwaway
