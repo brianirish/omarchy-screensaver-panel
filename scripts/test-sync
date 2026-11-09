@@ -43,7 +43,7 @@ sync() {
   # A translated catalog, to see a dropped effect leave every language.
   printf '{\n  "effect.wipe.name": "Balayage",\n  "title": "Économiseur"\n}\n' >"$tmp/$name/i18n/fr.json"
   cp scripts/sync-upstream "$tmp/$name/scripts/"
-  cp extras/omarchy-launch-screensaver "$tmp/$name/extras/"
+  cp extras/omarchy-launch-screensaver extras/omarchy-screensaver extras/omarchy-screensaver.stock "$tmp/$name/extras/"
   printf '%s\n' "$text" >"$tmp/$name/registry.rs"
   (cd "$tmp/$name" && python3 scripts/sync-upstream --out-dir out --registry registry.rs \
     --launcher-commit "$lock_commit" --screensaver-version "$screensaver_version" \

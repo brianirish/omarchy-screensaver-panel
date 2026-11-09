@@ -1,0 +1,193 @@
+#!/bin/bash
+
+# Tests for extras/omarchy-screensaver, the terminal screensaver override.
+# It runs against fakes of everything it touches: a ttfx that answers --help
+# with a chosen effect list and otherwise records the arguments it was given,
+# and stand-ins for hyprctl, pgrep, pkill, stty, tty and logger, so nothing
+# reaches the real session, terminal or journal. The fake hyprctl reports
+# another window in focus, so the override starts ttfx once and exits through
+# its own focus check. Needs bash, jq and awk.
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+override=$PWD/extras/omarchy-screensaver
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/bin" "$tmp/home/.config/omarchy"
+
+# The effect list ttfx 0.5's --help prints, cut down, plus a dashed name and
+# a description wrapped onto a second line, as a narrower --help would print.
+cat >"$tmp/help" <<'EOF'
+Terminal text effects (Rust port of terminaltexteffects)
+
+Usage: ttfx [OPTIONS] [COMMAND]
+
+Commands:
+  beams            Create beams which travel over the canvas illuminating the characters behind them
+  matrix           Matrix digital rain effect
+  orbittingvolley  Four launchers orbit the canvas firing volleys of characters inward to build the input text from the center out
+  rain             Rain characters from the top of the canvas
+  spray            Draws the characters spawning at varying rates from a
+                   single point
+  vhs-tape         Lines of characters glitch left and right
+  help             Print this message or the help of the given subcommand(s)
+
+Options:
+  -v, --version
+          Print the version and exit
+      --include-effects <INCLUDE_EFFECTS>...
+          Limit random-effect selection to these effects
+EOF
+
+cat >"$tmp/bin/ttfx" <<'EOF'
+#!/bin/bash
+if [[ ${1:-} == --help ]]; then
+  cat "$FAKE_HELP"
+  exit 0
+fi
+printf '%s\n' "$@" >"$FAKE_DIR/ttfx-args.tmp"
+mv "$FAKE_DIR/ttfx-args.tmp" "$FAKE_DIR/ttfx-args"
+EOF
+
+# Reports another window in focus, which ends the override's loop.
+cat >"$tmp/bin/hyprctl" <<'EOF'
+#!/bin/bash
+[[ ${1:-} == activewindow ]] && echo '{"class":"org.example.other"}'
+exit 0
+EOF
+
+# "ttfx is running" once the fake ttfx has recorded its arguments.
+cat >"$tmp/bin/pgrep" <<'EOF'
+#!/bin/bash
+for _ in $(seq 100); do
+  [[ -f $FAKE_DIR/ttfx-args ]] && exit 0
+  sleep 0.05
+done
+exit 1
+EOF
+
+cat >"$tmp/bin/logger" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >>"$FAKE_DIR/journal"
+EOF
+
+# A terminal that has already been resized, so the override doesn't wait.
+cat >"$tmp/bin/stty" <<'EOF'
+#!/bin/bash
+[[ ${1:-} == size ]] && echo "40 120"
+exit 0
+EOF
+
+printf '#!/bin/bash\nexit 0\n' >"$tmp/bin/pkill"
+printf '#!/bin/bash\necho /dev/pts/99\n' >"$tmp/bin/tty"
+chmod +x "$tmp/bin"/*
+
+failures=0
+# A broken override could loop for ever; give each run ten seconds.
+limit=()
+if command -v timeout >/dev/null; then limit=(timeout 10); fi
+
+# run SHELL_JSON: the arguments the override started ttfx with, one per line.
+run() {
+  local config=$1
+  if [[ -n $config ]]; then
+    printf '%s\n' "$config" >"$tmp/home/.config/omarchy/shell.json"
+  else
+    rm -f "$tmp/home/.config/omarchy/shell.json"
+  fi
+  rm -f "$tmp/ttfx-args" "$tmp/journal"
+  touch "$tmp/journal"
+  HOME="$tmp/home" PATH="$tmp/bin:$PATH" FAKE_DIR="$tmp" FAKE_HELP="${HELP-$tmp/help}" \
+    "${limit[@]}" bash "$override" </dev/null >"$tmp/stdout" 2>"$tmp/stderr" || echo "exit $?"
+  cat "$tmp/ttfx-args" 2>/dev/null || true
+}
+
+# The arguments after the fixed ones, which are where the effects go.
+effects() { run "$@" | sed -n '/^--random-effect$/,/^--no-eol$/p' | sed '1d;$d'; }
+
+expect() {
+  local name=$1 want=$2 got=$3
+  if [[ $got == "$want" ]]; then
+    echo "ok   $name"
+  else
+    echo "FAIL $name"
+    echo "  want: ${want//$'\n'/ | }"
+    echo "  got:  ${got//$'\n'/ | }"
+    failures=$((failures + 1))
+  fi
+}
+
+in_bar() { printf '{"bar":{"layout":{"right":[{"id":"omarchy.clock"},{"id":"brianirish.screensaver","effects":%s}]}}}' "$1"; }
+
+expect "no shell.json: stock ttfx command line" \
+  "-i
+$tmp/home/.config/omarchy/branding/screensaver.txt
+--frame-rate
+120
+--canvas-width
+0
+--canvas-height
+0
+--reuse-canvas
+--anchor-canvas
+c
+--anchor-text
+c
+--random-effect
+--no-eol
+--no-restore-cursor" "$(run "")"
+
+expect "nothing pinned: every effect" \
+  "" "$(effects "$(in_bar '[]')")"
+
+expect "pins become --include-effects, one argument each" \
+  $'--include-effects\nmatrix\nrain' "$(effects "$(in_bar '["matrix","rain"]')")"
+
+expect "pins on a plugins[] entry count too" \
+  $'--include-effects\nbeams' "$(effects '{"plugins":[{"id":"brianirish.screensaver","effects":["beams"]}]}')"
+
+expect "a pin in another bar section counts too" \
+  $'--include-effects\nbeams' "$(effects '{"bar":{"layout":{"centerEnd":[{"id":"brianirish.screensaver","effects":["beams"]}]}}}')"
+
+expect "a single string is one pin" \
+  $'--include-effects\nmatrix' "$(effects "$(in_bar '"matrix"')")"
+
+expect "names that could become flags, or aren't plain, are dropped" \
+  $'--include-effects\nrain' "$(effects "$(in_bar '["-x","--force","Matrix","rain;rm",3,"rain"]')")"
+
+expect "a dashed name ttfx lists is kept" \
+  $'--include-effects\nvhs-tape' "$(effects "$(in_bar '["vhs-tape"]')")"
+
+expect "a pin ttfx doesn't have is dropped" \
+  $'--include-effects\nmatrix' "$(effects "$(in_bar '["matrix","gone"]')")"
+expect "and the skip goes to the journal, not the screen" \
+  "1 0" "$(grep -c "skipping pinned effect 'gone'" "$tmp/journal") $(grep -c gone "$tmp/stdout" "$tmp/stderr" | awk -F: '{s += $2} END {print s}')"
+
+expect "a wrapped description line is not an effect" \
+  $'--include-effects\nspray' "$(effects "$(in_bar '["spray","single"]')")"
+
+expect "help is ttfx's own command, not an effect" \
+  "" "$(effects "$(in_bar '["help"]')")"
+
+expect "only unknown pins: every effect" \
+  "" "$(effects "$(in_bar '["gone","also-gone"]')")"
+
+printf 'ttfx 9.9\n\nUsage: ttfx [OPTIONS]\n' >"$tmp/odd-help"
+expect "a --help without an effect list passes the pins through" \
+  $'--include-effects\nmatrix\ngone' "$(HELP="$tmp/odd-help" effects "$(in_bar '["matrix","gone"]')")"
+
+expect "an empty --help passes the pins through" \
+  $'--include-effects\nmatrix' "$(HELP=/dev/null effects "$(in_bar '["matrix"]')")"
+
+expect "broken shell.json: every effect" \
+  "" "$(effects "{not json")"
+
+run "$(in_bar '["matrix"]')" >/dev/null
+expect "exits cleanly once another window has focus" "" "$(cat "$tmp/stderr")"
+
+if ((failures)); then
+  echo "$failures failure(s)" >&2
+  exit 1
+fi
+echo "All override tests passed."

@@ -11,12 +11,12 @@ cd "$(dirname "$0")/.."
 step() { printf '\n== %s\n' "$*"; }
 
 step "Shell syntax"
-bash -n extras/omarchy-launch-screensaver scripts/check scripts/qml-api-lint scripts/test-launcher \
-  scripts/test-sync scripts/vendor/omarchy-plugin-validate
+bash -n extras/omarchy-launch-screensaver extras/omarchy-screensaver scripts/check scripts/qml-api-lint \
+  scripts/test-launcher scripts/test-override scripts/test-sync scripts/vendor/omarchy-plugin-validate
 
 step "ShellCheck"
-shellcheck extras/omarchy-launch-screensaver scripts/check scripts/qml-api-lint scripts/test-launcher \
-  scripts/test-sync
+shellcheck extras/omarchy-launch-screensaver extras/omarchy-screensaver scripts/check scripts/qml-api-lint \
+  scripts/test-launcher scripts/test-override scripts/test-sync
 
 step "Unit tests (Model.js)"
 node tests/model_test.js
@@ -24,7 +24,10 @@ node tests/model_test.js
 step "Translations (i18n/*.json)"
 node tests/i18n_test.js
 
-step "Effect-pinning wrapper"
+step "Terminal screensaver override (extras/omarchy-screensaver)"
+bash scripts/test-override
+
+step "Native screensaver wrapper (extras/omarchy-launch-screensaver)"
 bash scripts/test-launcher
 
 step "Plugin manifest (Omarchy's omarchy-plugin-validate)"

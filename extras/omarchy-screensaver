@@ -1,0 +1,97 @@
+#!/bin/bash
+
+# Effect pinning for the terminal screensaver, from the brianirish.screensaver
+# panel. A copy of Omarchy's own omarchy-screensaver (Omarchy 4.5.0 runs it in
+# a terminal on every display), installed as /usr/local/bin/omarchy-screensaver
+# so it wins PATH resolution once the README's hyprland.lua PATH block puts
+# /usr/local/bin first. Identical to stock except that the random rotation is
+# limited to the effects pinned on the widget's shell.json entry; with none
+# pinned it behaves exactly like stock. scripts/sync-upstream keeps it merged
+# with the stock script of the newest Omarchy release.
+#
+# Omarchy releases with the native screensaver no longer run this script; the
+# omarchy-launch-screensaver wrapper beside it pins effects there.
+
+screensaver_in_focus() {
+  hyprctl activewindow -j | jq -e '.class == "org.omarchy.screensaver"' >/dev/null 2>&1
+}
+
+exit_screensaver() {
+  hyprctl eval 'hl.config({ cursor = { invisible = false } })' &>/dev/null || hyprctl keyword cursor:invisible false &>/dev/null || true
+  pkill -x ttfx 2>/dev/null
+  pkill -f '[o]rg.omarchy.screensaver' 2>/dev/null
+  exit 0
+}
+
+# Exit the screensaver on signals and input from keyboard and mouse
+trap exit_screensaver SIGINT SIGTERM SIGHUP SIGQUIT
+
+printf '\033]11;rgb:00/00/00\007'  # Set background color to black
+stty -echo 2>/dev/null  # Don't echo the key that stops the screensaver into the corner
+
+hyprctl eval 'hl.config({ cursor = { invisible = true } })' &>/dev/null || hyprctl keyword cursor:invisible true &>/dev/null
+
+tty=$(tty 2>/dev/null)
+
+# Terminals allocate the pty at the default 80x24 and only resize it once the
+# compositor has told the window how big it is. ttfx measures the terminal once,
+# at startup, so starting it before the resize lands sizes an 80x24 canvas and
+# paints it into the corner of a fullscreen window.
+wait_for_terminal_resize() {
+  local deadline=$((SECONDS + 2))
+  while ((SECONDS < deadline)) && [[ $(stty size 2>/dev/null) == "24 80" ]]; do
+    sleep 0.02
+  done
+}
+
+wait_for_terminal_resize
+
+# Effects pinned in the Screensaver panel live inline on the widget's
+# shell.json entry (bar layout or plugins[]). Empty or missing means all.
+# Only plain effect names pass the filter (lowercase letters, digits and
+# dashes, never a leading dash), so nothing read from the config can ever be
+# handed to ttfx as a flag.
+mapfile -t pinned_effects < <(jq -r \
+  '[.bar.layout[]?[]?, .plugins[]?] | map(select(.id == "brianirish.screensaver"))
+   | (.[0].effects // []) | if type == "array" then . else [.] end
+   | map(select(type == "string" and test("^[a-z][a-z0-9-]*$"))) | .[]' \
+  "$HOME/.config/omarchy/shell.json" 2>/dev/null)
+
+# ttfx won't start over an effect it doesn't know, and this loop would then
+# spin on a black screen, so drop pins this ttfx doesn't have (one a ttfx
+# update removed, say). Its --help lists each effect as a command, indented two
+# spaces. If that list can't be read, the pins go through as they are. Skips go
+# to the journal (journalctl -t omarchy-screensaver), since stderr here is the
+# screensaver's own terminal.
+if ((${#pinned_effects[@]})); then
+  known_effects=$(ttfx --help 2>/dev/null | awk '
+    /^Commands:/ { listing = 1; next }
+    listing && /^$/ { exit }
+    listing && /^  [a-z]/ && $1 ~ /^[a-z][a-z0-9-]*$/ && $1 != "help" { print $1 }')
+  if [[ -n $known_effects ]]; then
+    kept_effects=()
+    for effect in "${pinned_effects[@]}"; do
+      if [[ $'\n'$known_effects$'\n' == *$'\n'$effect$'\n'* ]]; then
+        kept_effects+=("$effect")
+      else
+        logger -t omarchy-screensaver "skipping pinned effect '$effect', which ttfx does not have" 2>/dev/null
+      fi
+    done
+    pinned_effects=("${kept_effects[@]}")
+  fi
+fi
+
+effect_args=(--random-effect)
+((${#pinned_effects[@]})) && effect_args+=(--include-effects "${pinned_effects[@]}")
+
+while true; do
+  ttfx -i "$HOME/.config/omarchy/branding/screensaver.txt" \
+    --frame-rate 120 --canvas-width 0 --canvas-height 0 --reuse-canvas --anchor-canvas c --anchor-text c \
+    "${effect_args[@]}" --no-eol --no-restore-cursor &
+
+  while pgrep -t "${tty#/dev/}" -x ttfx >/dev/null; do
+    if read -rn1 -t 1 || ! screensaver_in_focus; then
+      exit_screensaver
+    fi
+  done
+done

@@ -57,6 +57,8 @@ PKGBUILD_PATH = "pkgbuilds/omarchy-screensaver/PKGBUILD"
 REGISTRY_PATH = "src/effects/mod.rs"
 
 WRAPPER = ROOT / "extras/omarchy-launch-screensaver"
+OVERRIDE = ROOT / "extras/omarchy-screensaver"
+STOCK = ROOT / "extras/omarchy-screensaver.stock"
 MODEL = ROOT / "Model.js"
 I18N = ROOT / "i18n"
 ENGLISH = I18N / "en.json"
@@ -65,8 +67,8 @@ CHANGELOG = ROOT / "CHANGELOG.md"
 README = ROOT / "README.md"
 LOCK = ROOT / "upstream.json"
 
-# Must stay in step with the jq allowlist in extras/omarchy-launch-screensaver;
-# --lint checks that it does.
+# Must stay in step with the jq allowlist in both scripts in extras/; --lint
+# checks that it does.
 EFFECT_NAME_PATTERN = "^[a-z][a-z0-9-]*$"
 EFFECT_NAME = re.compile(EFFECT_NAME_PATTERN)
 README_COUNT = re.compile(r"\b(\d+) `ttfx` effects")
@@ -389,9 +391,12 @@ def lint():
     if text[start:end] != render_effects(effects):
         raise SystemExit("Model.js effect entries must be sorted by value, one per line, "
                          "in the form scripts/sync-upstream writes")
-    if f'test("{EFFECT_NAME_PATTERN}")' not in WRAPPER.read_text():
-        raise SystemExit(f"{WRAPPER.relative_to(ROOT)} no longer filters effect names with "
-                         f"{EFFECT_NAME_PATTERN}; keep it and EFFECT_NAME_PATTERN in step")
+    for script in (OVERRIDE, WRAPPER):
+        if f'test("{EFFECT_NAME_PATTERN}")' not in script.read_text():
+            raise SystemExit(f"{script.relative_to(ROOT)} no longer filters effect names with "
+                             f"{EFFECT_NAME_PATTERN}; keep it and EFFECT_NAME_PATTERN in step")
+    if not STOCK.exists():
+        raise SystemExit(f"{STOCK.relative_to(ROOT)}, the override's merge base, is missing")
     match = README_COUNT.search(README.read_text())
     if not match:
         raise SystemExit("README.md no longer says how many `ttfx` effects there are")
